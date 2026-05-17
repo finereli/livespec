@@ -555,6 +555,8 @@ const TEMPLATE = `<!doctype html>
   let COMMENTS = [];
 
   async function refresh() {
+    // Don't redraw while the user is mid-edit — would wipe open editors and steal scroll/focus.
+    if (document.querySelector(".editor")) return;
     try {
       const res = await fetch(API, { cache: "no-store" });
       if (!res.ok) throw new Error(res.statusText);
