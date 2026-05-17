@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="icon">
+    <!-- Page body (ink) -->
+    <path d="M96 64 H336 L416 144 V448 H96 Z" fill="#1B2A33"/>
+    <!-- Folded corner (cream) -->
+    <path d="M336 64 V144 H416 Z" fill="#F4ECD8"/>
+    <!-- Text lines (cream) -->
+    <rect x="136" y="200" width="176" height="20" rx="4" fill="#F4ECD8"/>
+    <rect x="136" y="240" width="240" height="20" rx="4" fill="#F4ECD8"/>
+    <!-- Checkmark (emerald) -->
+    <path d="M152 348 L228 424 L392 260 L356 224 L228 352 L188 312 Z" fill="#10B981"/>
+  </g>
+</svg>

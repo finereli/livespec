@@ -41,19 +41,58 @@ function firstH1(md) {
   return m ? m[1].trim() : "Untitled";
 }
 
+// Storage layout (versioned, with legacy fallback):
+//   doc:{id}                -> { title, editToken, currentVersion, versions:[{v,created}],
+//                                created, updated }
+//   doc:{id}:v{n}           -> { markdown, created }
+//   comments:{id}:v{n}      -> [ comment entries ]
+// Legacy (pre-versioning): doc:{id} also carried .markdown for v1, and
+// comments lived at comments:{id}. loadDoc synthesizes a v1 view of these
+// records; the first PUT migrates them to the new layout.
+
 async function loadDoc(env, id) {
   const raw = await env.LIVESPEC.get("doc:" + id);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  const doc = JSON.parse(raw);
+  if (typeof doc.currentVersion === "number") {
+    if (!doc.versions) doc.versions = [{ v: doc.currentVersion, created: doc.created }];
+    return doc;
+  }
+  // Legacy doc — virtual v1.
+  return {
+    title: doc.title,
+    editToken: doc.editToken,
+    currentVersion: 1,
+    versions: [{ v: 1, created: doc.created }],
+    created: doc.created,
+    updated: doc.updated,
+    _legacy: true,
+    _legacyMarkdown: doc.markdown,
+  };
 }
-async function saveDoc(env, id, doc) {
-  await env.LIVESPEC.put("doc:" + id, JSON.stringify(doc));
+
+async function loadMarkdown(env, id, doc, version) {
+  if (version < 1 || version > doc.currentVersion) return null;
+  if (doc._legacy && version === 1) return doc._legacyMarkdown;
+  const raw = await env.LIVESPEC.get(`doc:${id}:v${version}`);
+  return raw ? JSON.parse(raw).markdown : null;
 }
-async function loadComments(env, id) {
-  const raw = await env.LIVESPEC.get("comments:" + id);
+
+async function loadVersionComments(env, id, doc, version) {
+  const key = doc._legacy && version === 1
+    ? "comments:" + id
+    : `comments:${id}:v${version}`;
+  const raw = await env.LIVESPEC.get(key);
   return raw ? JSON.parse(raw) : [];
 }
-async function saveComments(env, id, arr) {
-  await env.LIVESPEC.put("comments:" + id, JSON.stringify(arr));
+
+async function saveCurrentComments(env, id, doc, arr) {
+  // Mutations only ever happen on the current version.
+  const v = doc.currentVersion;
+  const key = doc._legacy && v === 1
+    ? "comments:" + id
+    : `comments:${id}:v${v}`;
+  await env.LIVESPEC.put(key, JSON.stringify(arr));
 }
 
 async function createDoc(req, url, env) {
@@ -62,12 +101,18 @@ async function createDoc(req, url, env) {
   const id = randId();
   const editToken = randToken();
   const now = Date.now();
-  await saveDoc(env, id, {
-    title: firstH1(md), markdown: md, editToken, created: now, updated: now,
-  });
+  await env.LIVESPEC.put(`doc:${id}:v1`, JSON.stringify({ markdown: md, created: now }));
+  await env.LIVESPEC.put("doc:" + id, JSON.stringify({
+    title: firstH1(md),
+    editToken,
+    currentVersion: 1,
+    versions: [{ v: 1, created: now }],
+    created: now,
+    updated: now,
+  }));
   const base = url.origin;
   return json({
-    id, editToken,
+    id, editToken, version: 1,
     url: `${base}/${id}`,
     rawUrl: `${base}/api/docs/${id}`,
     commentsUrl: `${base}/api/docs/${id}/comments`,
@@ -77,15 +122,45 @@ async function createDoc(req, url, env) {
 async function updateDoc(req, env, id) {
   const doc = await loadDoc(env, id);
   if (!doc) return notFound("doc not found");
-  const token = req.headers.get("x-edit-token");
-  if (token !== doc.editToken) return forbidden("invalid edit token");
+  if (req.headers.get("x-edit-token") !== doc.editToken) return forbidden("invalid edit token");
   const md = await req.text();
   if (!md.trim()) return bad("empty markdown");
-  doc.markdown = md;
-  doc.title = firstH1(md);
-  doc.updated = Date.now();
-  await saveDoc(env, id, doc);
-  return json({ id, title: doc.title, updated: doc.updated });
+  const now = Date.now();
+
+  // Migrate legacy v1 in place so it stays reachable at /:id/v1 after the bump.
+  if (doc._legacy) {
+    await env.LIVESPEC.put(
+      `doc:${id}:v1`,
+      JSON.stringify({ markdown: doc._legacyMarkdown, created: doc.created }),
+    );
+    const legacyComments = await env.LIVESPEC.get("comments:" + id);
+    if (legacyComments) {
+      await env.LIVESPEC.put(`comments:${id}:v1`, legacyComments);
+    }
+  }
+
+  const next = doc.currentVersion + 1;
+  await env.LIVESPEC.put(`doc:${id}:v${next}`, JSON.stringify({ markdown: md, created: now }));
+  const versions = (doc.versions || []).concat([{ v: next, created: now }]);
+  await env.LIVESPEC.put("doc:" + id, JSON.stringify({
+    title: firstH1(md),
+    editToken: doc.editToken,
+    currentVersion: next,
+    versions,
+    created: doc.created,
+    updated: now,
+  }));
+  return json({ id, version: next, title: firstH1(md), updated: now });
+}
+
+async function deleteDocAndAll(env, id, doc) {
+  // Wipe everything for this id.
+  await env.LIVESPEC.delete("doc:" + id);
+  await env.LIVESPEC.delete("comments:" + id); // legacy
+  for (const { v } of doc.versions || []) {
+    await env.LIVESPEC.delete(`doc:${id}:v${v}`);
+    await env.LIVESPEC.delete(`comments:${id}:v${v}`);
+  }
 }
 
 export default {
@@ -109,49 +184,68 @@ export default {
       return createDoc(req, url, env);
     }
 
-    // --- API: doc routes /api/docs/:id[/comments[/:cid]] ---
-    const apiMatch = pathname.match(/^\/api\/docs\/([a-z0-9]{4,})(?:\/(comments)(?:\/([a-z0-9]{4,}))?)?$/);
+    // --- API: doc routes /api/docs/:id[/v:n][/comments[/:cid]] ---
+    const apiMatch = pathname.match(
+      /^\/api\/docs\/([a-z0-9]{4,})(?:\/v(\d+))?(?:\/(comments)(?:\/([a-z0-9]{4,}))?)?$/,
+    );
     if (apiMatch) {
-      const [, id, sub, cid] = apiMatch;
+      const [, id, vstr, sub, cid] = apiMatch;
+      const requestedVersion = vstr ? parseInt(vstr, 10) : null;
       const doc = await loadDoc(env, id);
       if (!doc) return notFound("doc not found");
 
+      const effective = requestedVersion ?? doc.currentVersion;
+      if (effective < 1 || effective > doc.currentVersion) return notFound("version not found");
+
+      const isMutation = req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS";
+      if (isMutation && requestedVersion !== null && requestedVersion !== doc.currentVersion) {
+        return forbidden("old versions are read-only");
+      }
+
       // GET doc (raw json)
       if (!sub && req.method === "GET") {
+        const md = await loadMarkdown(env, id, doc, effective);
+        if (md === null) return notFound("version not found");
         return json({
-          id, title: doc.title, markdown: doc.markdown,
-          created: doc.created, updated: doc.updated,
+          id,
+          version: effective,
+          currentVersion: doc.currentVersion,
+          versions: doc.versions,
+          title: doc.title,
+          markdown: md,
+          created: doc.created,
+          updated: doc.updated,
         });
       }
-      // PUT doc (update markdown; requires edit token)
-      if (!sub && req.method === "PUT") return updateDoc(req, env, id);
-      // DELETE doc (requires edit token)
+      // PUT doc → bump version (only on /api/docs/:id, no /v:n)
+      if (!sub && req.method === "PUT") {
+        if (requestedVersion !== null) return forbidden("PUT a new version via /api/docs/:id (no /v:n)");
+        return updateDoc(req, env, id);
+      }
       if (!sub && req.method === "DELETE") {
-        const token = req.headers.get("x-edit-token");
-        if (token !== doc.editToken) return forbidden("invalid edit token");
-        await env.LIVESPEC.delete("doc:" + id);
-        await env.LIVESPEC.delete("comments:" + id);
+        if (requestedVersion !== null) return forbidden("cannot delete a single version");
+        if (req.headers.get("x-edit-token") !== doc.editToken) return forbidden("invalid edit token");
+        await deleteDocAndAll(env, id, doc);
         return json({ ok: true });
       }
 
-      // Comments
+      // Comments — reads can target any version; writes always hit current.
       if (sub === "comments" && !cid && req.method === "GET") {
-        return json(await loadComments(env, id));
+        return json(await loadVersionComments(env, id, doc, effective));
       }
       if (sub === "comments" && !cid && req.method === "POST") {
         const body = await req.json().catch(() => null);
         if (!body || !body.blockId) return bad("blockId required");
         const author = body.author || "anon";
         const type = body.type === "approve" ? "approve" : "comment";
-        const comments = await loadComments(env, id);
+        const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         if (type === "approve") {
-          // Toggle: one approval per (blockId, author).
           const idx = comments.findIndex(
             (c) => c.type === "approve" && c.blockId === body.blockId && c.author === author,
           );
           if (idx >= 0) {
             comments.splice(idx, 1);
-            await saveComments(env, id, comments);
+            await saveCurrentComments(env, id, doc, comments);
             return json({ ok: true, approved: false });
           }
           const entry = {
@@ -163,7 +257,7 @@ export default {
             created: Date.now(),
           };
           comments.push(entry);
-          await saveComments(env, id, comments);
+          await saveCurrentComments(env, id, doc, comments);
           return json({ ok: true, approved: true, cid: entry.cid }, 201);
         }
         if (!body.body) return bad("body required for comment");
@@ -178,7 +272,7 @@ export default {
           updated: Date.now(),
         };
         comments.push(entry);
-        await saveComments(env, id, comments);
+        await saveCurrentComments(env, id, doc, comments);
         return json(entry, 201);
       }
       if (sub === "comments" && cid && req.method === "PUT") {
@@ -186,7 +280,7 @@ export default {
         if (!body || !body.body) return bad("body required");
         const author = body.author || req.headers.get("x-author");
         const editToken = req.headers.get("x-edit-token");
-        const comments = await loadComments(env, id);
+        const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         const idx = comments.findIndex((c) => c.cid === cid);
         if (idx < 0) return notFound("comment not found");
         const c = comments[idx];
@@ -194,13 +288,13 @@ export default {
         if (c.author !== author && editToken !== doc.editToken) return forbidden("not your comment");
         c.body = String(body.body).slice(0, 5000);
         c.updated = Date.now();
-        await saveComments(env, id, comments);
+        await saveCurrentComments(env, id, doc, comments);
         return json(c);
       }
       if (sub === "comments" && cid && req.method === "DELETE") {
         const author = req.headers.get("x-author") || url.searchParams.get("author");
         const editToken = req.headers.get("x-edit-token");
-        const comments = await loadComments(env, id);
+        const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         const idx = comments.findIndex((c) => c.cid === cid);
         if (idx < 0) return notFound("comment not found");
         const c = comments[idx];
@@ -208,20 +302,30 @@ export default {
           return forbidden("not your comment");
         }
         comments.splice(idx, 1);
-        await saveComments(env, id, comments);
+        await saveCurrentComments(env, id, doc, comments);
         return json({ ok: true });
       }
     }
 
-    // --- /:id — GET renders HTML; PUT updates markdown (edit token required). ---
-    const docMatch = pathname.match(/^\/([a-z0-9]{4,})\/?$/);
+    // --- /:id[/v:n] — GET renders HTML; PUT /:id updates markdown (edit token required). ---
+    const docMatch = pathname.match(/^\/([a-z0-9]{4,})(?:\/v(\d+))?\/?$/);
     if (docMatch) {
       const id = docMatch[1];
-      if (req.method === "PUT") return updateDoc(req, env, id);
+      const vstr = docMatch[2];
+      if (req.method === "PUT") {
+        if (vstr) return forbidden("PUT a new version via /:id (no /v:n)");
+        return updateDoc(req, env, id);
+      }
       if (req.method === "GET") {
         const doc = await loadDoc(env, id);
         if (!doc) return new Response("Not found", { status: 404 });
-        const html = renderHtml(id, doc);
+        const requestedVersion = vstr ? parseInt(vstr, 10) : doc.currentVersion;
+        if (requestedVersion < 1 || requestedVersion > doc.currentVersion) {
+          return new Response("Version not found", { status: 404 });
+        }
+        const md = await loadMarkdown(env, id, doc, requestedVersion);
+        if (md === null) return new Response("Version not found", { status: 404 });
+        const html = renderHtml(id, doc, requestedVersion, md);
         return new Response(html, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
@@ -240,12 +344,18 @@ function escapeScript(s) {
   return s.replace(/<\/script>/gi, "<\\/script>");
 }
 
-function renderHtml(id, doc) {
+function renderHtml(id, doc, viewingVersion, markdown) {
   const title = escapeHtml(doc.title || "Untitled");
-  const md = escapeScript(doc.markdown);
+  const md = escapeScript(markdown);
+  const isReadonly = viewingVersion !== doc.currentVersion;
+  const versionsJson = JSON.stringify(doc.versions || []);
   return TEMPLATE
     .replace(/__TITLE__/g, title)
     .replace(/__DOC_ID__/g, id)
+    .replace(/__VIEWING_VERSION__/g, String(viewingVersion))
+    .replace(/__CURRENT_VERSION__/g, String(doc.currentVersion))
+    .replace("__VERSIONS_JSON__", versionsJson)
+    .replace(/__READONLY__/g, isReadonly ? "true" : "false")
     .replace("__MARKDOWN__", md);
 }
 
@@ -289,6 +399,40 @@ const TEMPLATE = `<!doctype html>
   .topbar .brand { color: var(--muted); text-decoration: none; margin-right: auto; font-weight: 600; }
   .topbar .brand:hover { color: var(--accent); }
   .topbar .count { color: var(--muted); }
+  .version-menu { position: relative; }
+  .version-toggle { font: inherit; font-size: 12px; padding: 4px 10px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--rule);
+    border-radius: 4px; cursor: pointer; }
+  .version-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .version-toggle .caret { font-size: 9px; margin-left: 2px; }
+  .version-list { position: absolute; top: calc(100% + 4px); right: 0;
+    min-width: 180px; max-height: 50vh; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 4px; display: none; z-index: 20;
+    box-shadow: 0 6px 18px rgba(0,0,0,.15); }
+  .version-list.open { display: block; }
+  .version-list a { display: flex; justify-content: space-between; gap: 12px;
+    padding: 6px 10px; color: var(--fg); text-decoration: none; border-radius: 4px;
+    font-size: 13px; }
+  .version-list a:hover { background: var(--accent-bg); }
+  .version-list a.current { font-weight: 600; }
+  .version-list a.viewing { color: var(--accent); }
+  .version-list .when { color: var(--muted); font-size: 11px; }
+
+  .readonly-banner { background: #fff4d6; color: #6b5300;
+    padding: 8px 16px; font-size: 13px; text-align: center;
+    border-bottom: 1px solid #e9d780; }
+  .readonly-banner a { color: #6b5300; }
+  @media (prefers-color-scheme: dark) {
+    .readonly-banner { background: #3a2e10; color: #f0d690;
+      border-bottom-color: #5a4820; }
+    .readonly-banner a { color: #f0d690; }
+  }
+
+  /* In readonly mode, hide the editor affordances entirely. */
+  body.readonly .block-actions, body.readonly .inline-comment .del { display: none !important; }
+  body.readonly .inline-comment.mine { cursor: default; }
+  body.readonly #copy-all { display: none; }
   .doc-footer {
     max-width: 760px; margin: 40px auto 24px; padding: 16px 24px 0;
     border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px;
@@ -420,16 +564,72 @@ const TEMPLATE = `<!doctype html>
 <div class="topbar">
   <a class="brand" href="/">livespec</a>
   <span class="count"><span id="approve-count">0</span> approved · <span id="count">0</span> <span id="count-label">comments</span></span>
+  <div class="version-menu">
+    <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
+    <div id="version-list" class="version-list"></div>
+  </div>
   <button id="copy-all" class="primary">Copy all</button>
 </div>
+<div id="readonly-banner" class="readonly-banner" hidden>
+  Read-only · viewing v<span id="rb-viewing">?</span> of <span id="rb-current">?</span>.
+  <a id="rb-latest" href="/__DOC_ID__">Go to latest →</a>
+</div>
 <main id="content"></main>
-<footer class="doc-footer">__DOC_ID__</footer>
+<footer class="doc-footer">__DOC_ID__ · v__VIEWING_VERSION__</footer>
 <div class="toast" id="toast"></div>
 <script id="md-source" type="text/markdown">__MARKDOWN__<\/script>
 <script>
 (function () {
   const DOC_ID = "__DOC_ID__";
-  const API = "/api/docs/" + DOC_ID + "/comments";
+  const VIEWING_VERSION = __VIEWING_VERSION__;
+  const CURRENT_VERSION = __CURRENT_VERSION__;
+  const VERSIONS = __VERSIONS_JSON__;
+  const READONLY = __READONLY__;
+  // Comments are always fetched for the version being viewed; mutations always
+  // hit current. Since the page is locked to one version, just compute the URL.
+  const API = "/api/docs/" + DOC_ID + "/v" + VIEWING_VERSION + "/comments";
+
+  if (READONLY) document.body.classList.add("readonly");
+
+  // Readonly banner setup.
+  if (READONLY) {
+    const banner = document.getElementById("readonly-banner");
+    document.getElementById("rb-viewing").textContent = VIEWING_VERSION;
+    document.getElementById("rb-current").textContent = CURRENT_VERSION;
+    banner.hidden = false;
+  }
+
+  // Version menu.
+  (function () {
+    const toggle = document.getElementById("version-toggle");
+    const list = document.getElementById("version-list");
+    const fmt = (ms) => {
+      const d = new Date(ms);
+      const now = Date.now();
+      const diff = (now - ms) / 1000;
+      if (diff < 60) return "just now";
+      if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+      if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+      if (diff < 604800) return Math.floor(diff / 86400) + "d ago";
+      return d.toISOString().slice(0, 10);
+    };
+    const sorted = VERSIONS.slice().sort((a, b) => b.v - a.v);
+    for (const ver of sorted) {
+      const a = document.createElement("a");
+      a.href = ver.v === CURRENT_VERSION ? "/" + DOC_ID : "/" + DOC_ID + "/v" + ver.v;
+      const isCurrent = ver.v === CURRENT_VERSION;
+      const isViewing = ver.v === VIEWING_VERSION;
+      a.className = (isCurrent ? "current " : "") + (isViewing ? "viewing" : "");
+      a.innerHTML = '<span>v' + ver.v + (isCurrent ? ' (latest)' : '') + '</span><span class="when"></span>';
+      a.querySelector(".when").textContent = fmt(ver.created);
+      list.appendChild(a);
+    }
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      list.classList.toggle("open");
+    });
+    document.addEventListener("click", () => list.classList.remove("open"));
+  })();
 
   let AUTHOR = localStorage.getItem("livespec:author");
   if (!AUTHOR) {
@@ -718,7 +918,7 @@ const TEMPLATE = `<!doctype html>
       container.innerHTML = "";
       for (const c of list) {
         const div = document.createElement("div");
-        const isMine = c.author === AUTHOR;
+        const isMine = !READONLY && c.author === AUTHOR;
         div.className = "inline-comment" + (isMine ? " mine" : "");
         div.dataset.cid = c.cid;
         div.innerHTML =

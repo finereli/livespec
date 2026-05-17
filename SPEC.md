@@ -28,8 +28,11 @@ Single Cloudflare Worker (`src/worker.js`) backed by one KV namespace (`LIVESPEC
 
 KV keys:
 
-- `doc:{id}` — JSON `{ title, markdown, editToken, created, updated }`
-- `comments:{id}` — JSON array. Each entry is either a comment (`type: "comment"`, has `body`) or an approval (`type: "approve"`, no body, at most one per `blockId` per author).
+- `doc:{id}` — metadata: `{ title, editToken, currentVersion, versions: [{v, created}], created, updated }`
+- `doc:{id}:v{n}` — `{ markdown, created }`
+- `comments:{id}:v{n}` — JSON array. Each entry is either a comment (`type: "comment"`, has `body`) or an approval (`type: "approve"`, no body, at most one per `blockId` per author).
+
+(Pre-versioning docs are read transparently: legacy `doc:{id}.markdown` and `comments:{id}` are treated as v1 until the next `PUT` migrates them into the versioned layout.)
 
 IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex chars. Author IDs are generated client-side in `localStorage` so a browser can edit or delete its own entries.
 
@@ -37,15 +40,16 @@ IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex c
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/` | none | Create a doc. Body = raw markdown. Returns `{id, editToken, url}`. |
-| `GET` | `/:id` | none | Rendered HTML view. |
-| `PUT` | `/:id` | `x-edit-token` | Replace markdown. Wipes all comments and approvals (see below). |
-| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete the doc. |
-| `GET` | `/api/docs/:id` | none | Fetch raw doc JSON. |
-| `GET` | `/api/docs/:id/comments` | none | List comments and approvals. |
-| `POST` | `/api/docs/:id/comments` | none | Add a comment, or toggle an approval (`type: "approve"`). |
-| `PUT` | `/api/docs/:id/comments/:cid` | author | Edit a comment body. |
-| `DELETE` | `/api/docs/:id/comments/:cid` | author or edit token | Remove a comment or approval. |
+| `POST` | `/` | none | Create a doc at v1. Returns `{id, editToken, version, url}`. |
+| `GET` | `/:id` | none | Render current version. |
+| `GET` | `/:id/v:n` | none | Render version `n` (read-only). |
+| `PUT` | `/:id` | `x-edit-token` | Snapshot a new version `n+1`. |
+| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete the doc and every version. |
+| `GET` | `/api/docs/:id[/v:n]` | none | Fetch raw doc JSON for current or a specific version. Includes the `versions` list. |
+| `GET` | `/api/docs/:id[/v:n]/comments` | none | List comments + approvals for current or a specific version. |
+| `POST` | `/api/docs/:id/comments` | none | Add a comment, or toggle an approval (`type: "approve"`). Always targets current. |
+| `PUT` | `/api/docs/:id/comments/:cid` | author | Edit a comment body (current version only). |
+| `DELETE` | `/api/docs/:id/comments/:cid` | author or edit token | Remove a comment or approval (current version only). |
 
 ## Frontend
 
@@ -59,13 +63,18 @@ Server returns one HTML page per doc. It embeds the markdown in a `<script type=
 
 The page does not poll. Comments and approvals load once on page load. If the agent updates the doc, the human reloads.
 
-## Comment lifecycle
+## Versions and comment lifecycle
 
-- Comments live as long as the doc.
-- `PUT /:id` (replacing the markdown) **clears every comment and approval**. The expectation is that the agent has already fetched the current review, applied the edits, and is uploading the post-review version.
-- This keeps the model trivial: no orphan-detection, no block-by-block migration, no stale notes piling up. The reviewer's previous round is preserved in the conversation history (via *Copy all* → paste), not in the server.
+Every `PUT /:id` snapshots a new version of the doc. Old versions stay reachable, read-only, at `/:id/v:n`. The bare `/:id` always renders the latest.
 
-Alternative considered: preserve approvals on blocks whose hash didn't change, but drop comments. Rejected for the MVP — adds an axis of behavior to reason about. Easy to add later if a use case appears.
+- `POST /` creates the doc at v1.
+- `PUT /:id` writes v(n+1). The new version starts with zero comments and zero approvals; the old version keeps its own.
+- The topbar shows a version chip with a dropdown listing every version and how long ago it was written. Switching to an older version drops the page into read-only mode (no `+ comment`, no `✓`, no editing).
+- Comment writes always target the current version. The server rejects mutations on `/api/docs/:id/v:n/...` for any `n` other than current.
+
+This matches how the agent ↔ human loop already works — round by round. The reviewer's notes from v2 stay attached to v2 forever; v3 starts clean for the next pass.
+
+What this gives up: there's no automatic carry-forward of approvals to blocks whose text didn't change across versions. If you re-approve the same paragraph in v4 that you approved in v3, you click the ✓ again. Soft-preserve-on-unchanged-hash is on the open-questions list.
 
 ## Agent ↔ human flow
 
@@ -93,6 +102,7 @@ wrangler deploy                          # ships worker
 ## Open questions
 
 - **Agent-side write.** As above — let the agent post comments/replies, or keep it copy-paste only.
-- **Soft preserve approvals.** Keep ✓s across `PUT` when a block's hash didn't change.
-- **Read-only / locked mode.** A flag on a doc to freeze comments after the review round closes.
+- **Soft preserve approvals.** Carry forward ✓s into the next version when a block's hash didn't change.
+- **Lock current.** A "freeze the current version" toggle for when a review round is over but you don't want to bump a version yet.
+- **Version pruning.** Cap retained versions to a sensible N to keep KV usage bounded for chatty docs.
 - **Auth on update.** The edit token is currently the only gate on `PUT`. Fine for a personal tool; not fine if the URL leaks.

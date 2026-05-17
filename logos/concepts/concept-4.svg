@@ -1,0 +1,34 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <g id="icon">
+    <!-- Rounded square tile: graphite -->
+    <rect x="0" y="0" width="512" height="512" rx="112" ry="112" fill="#1e2233"/>
+
+    <!-- Monogram "ls" in electric blue -->
+    <!-- The 'l': a tall vertical bar with a small foot, doubling as a guide -->
+    <!-- Vertical stem -->
+    <path fill="#5ad2ff" d="M 140 112 H 196 V 372 H 140 Z"/>
+    <!-- Foot of the l (small horizontal tick) -->
+    <path fill="#5ad2ff" d="M 140 360 H 232 V 400 H 140 Z"/>
+
+    <!-- The 's': geometric, built from two arcs + a connecting bar, flowing like a comment thread -->
+    <!-- Top bowl: half-ring opening down-left -->
+    <path fill="#5ad2ff" d="
+      M 372 168
+      a 76 76 0 1 0 -76 76
+      H 348
+      a 32 32 0 1 1 32 -32
+      Z"/>
+    <!-- Middle connector bar -->
+    <path fill="#5ad2ff" d="M 296 212 H 348 V 268 H 296 Z"/>
+    <!-- Bottom bowl: half-ring opening up-right -->
+    <path fill="#5ad2ff" d="
+      M 272 312
+      a 76 76 0 1 0 76 -76
+      H 296
+      a 32 32 0 1 1 -32 32
+      Z"/>
+
+    <!-- Small accent dot near baseline: hint of a comment marker -->
+    <circle cx="372" cy="384" r="18" fill="#ffd16a"/>
+  </g>
+</svg>
