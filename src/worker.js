@@ -286,6 +286,8 @@ const TEMPLATE = `<!doctype html>
     border-bottom: 1px solid var(--rule);
     font-size: 13px;
   }
+  .topbar .brand { color: var(--muted); text-decoration: none; margin-right: auto; font-weight: 600; }
+  .topbar .brand:hover { color: var(--accent); }
   .topbar .count { color: var(--muted); }
   .doc-footer {
     max-width: 760px; margin: 40px auto 24px; padding: 16px 24px 0;
@@ -414,11 +416,12 @@ const TEMPLATE = `<!doctype html>
 </head>
 <body>
 <div class="topbar">
-  <span class="count"><span id="approve-count">0</span> ✓ · <span id="count">0</span> comment(s)</span>
+  <a class="brand" href="/">livespec</a>
+  <span class="count"><span id="approve-count">0</span> approved · <span id="count">0</span> comment(s)</span>
   <button id="copy-all" class="primary">Copy all</button>
 </div>
 <main id="content"></main>
-<footer class="doc-footer">livespec · <a href="/">home</a> · <span>__DOC_ID__</span></footer>
+<footer class="doc-footer">__DOC_ID__</footer>
 <div class="toast" id="toast"></div>
 <script id="md-source" type="text/markdown">__MARKDOWN__<\/script>
 <script>
