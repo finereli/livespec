@@ -217,29 +217,39 @@ const TEMPLATE = `<!doctype html>
   :root {
     --bg: #fafaf7; --fg: #1a1a1a; --muted: #6b6b6b;
     --rule: #e4e2dc; --accent: #b8541a; --accent-bg: #fdf1e7;
-    --panel-bg: #f3f1ea; --code-bg: #f0ede4;
+    --code-bg: #f0ede4;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #1a1a1a; --fg: #e8e6e0; --muted: #999; --rule: #333;
-      --accent: #e08a4a; --accent-bg: #2a1d12; --panel-bg: #222; --code-bg: #252525; }
+      --accent: #e08a4a; --accent-bg: #2a1d12; --code-bg: #252525; }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
-  body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    display: grid; grid-template-columns: 1fr 380px; min-height: 100vh; }
-  main { max-width: 760px; margin: 0 auto; padding: 48px 32px 120px; width: 100%; }
-  aside { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
-    background: var(--panel-bg); border-left: 1px solid var(--rule); padding: 16px; font-size: 13px; }
-  aside header { display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
-  aside h2 { font-size: 12px; margin: 0; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  aside .actions { display: flex; gap: 6px; }
+  body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 20px; gap: 10px;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--rule);
+    font-size: 13px;
+  }
+  .topbar .left { color: var(--muted); }
+  .topbar .left a { color: var(--muted); }
+  .topbar .right { display: flex; gap: 6px; align-items: center; }
+  .topbar .count { color: var(--muted); margin-right: 4px; }
+
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 120px; }
+
   button { font: inherit; font-size: 12px; background: var(--bg); color: var(--fg);
     border: 1px solid var(--rule); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   button.primary:hover { opacity: .9; color: white; }
-  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 .5em; }
+
+  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 .4em; }
   h1 { font-size: 2em; border-bottom: 1px solid var(--rule); padding-bottom: .3em; }
   h2 { font-size: 1.5em; } h3 { font-size: 1.2em; }
   p { margin: .8em 0; }
@@ -249,62 +259,81 @@ const TEMPLATE = `<!doctype html>
   blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .3em 1em; color: var(--muted); }
   ul, ol { padding-left: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
-  .block { position: relative; }
-  .block:hover { background: rgba(184, 84, 26, .04); }
-  .block.has-comment { border-left: 3px solid var(--accent); padding-left: 12px; margin-left: -15px; }
-  .block-btn { position: absolute; left: -36px; top: 4px; width: 26px; height: 26px; padding: 0;
-    border-radius: 50%; opacity: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-  .block:hover .block-btn, .block.has-comment .block-btn { opacity: 1; }
-  .block.has-comment .block-btn { background: var(--accent); color: white; border-color: var(--accent); }
-  .editor { margin: 8px 0; padding: 10px; background: var(--accent-bg);
+
+  .block-wrap { position: relative; margin: 0 -10px; padding: 0 10px; border-radius: 6px; transition: background .15s; }
+  .block-wrap > :first-child { margin-top: .4em; }
+  @media (hover: hover) {
+    .block-wrap:hover { background: var(--accent-bg); }
+  }
+  .block-wrap.selected { background: var(--accent-bg); }
+  .block-wrap.has-comment { box-shadow: inset 3px 0 0 var(--accent); }
+
+  .add-btn {
+    position: absolute; right: 6px; top: 4px;
+    font-size: 11px; padding: 2px 10px;
+    background: var(--accent); color: white;
+    border: none; border-radius: 10px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .15s;
+  }
+  @media (hover: hover) {
+    .block-wrap:hover .add-btn { opacity: .9; pointer-events: auto; }
+  }
+  .block-wrap.selected .add-btn { opacity: 1; pointer-events: auto; }
+  .add-btn:hover { opacity: 1 !important; color: white; }
+
+  .block-comments { margin: 4px 0 12px; }
+  .inline-comment {
+    font-size: 13px; font-style: italic; color: var(--muted);
+    border-left: 2px solid var(--accent);
+    padding: 4px 10px; margin: 4px 0;
+    background: color-mix(in srgb, var(--accent-bg) 60%, transparent);
+    border-radius: 0 4px 4px 0;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .inline-comment .body { flex: 1; white-space: pre-wrap; }
+  .inline-comment .who { font-style: normal; font-size: 11px; opacity: .7; flex-shrink: 0; }
+  .inline-comment.mine { cursor: pointer; }
+  .inline-comment.mine:hover { background: var(--accent-bg); color: var(--fg); }
+  .inline-comment .del {
+    font-style: normal; font-size: 11px; padding: 0 6px; opacity: 0;
+    background: transparent; border: none; color: var(--muted);
+  }
+  .inline-comment.mine:hover .del { opacity: 1; }
+  .inline-comment .del:hover { color: var(--accent); }
+
+  .editor { margin: 6px 0 12px; padding: 10px; background: var(--accent-bg);
     border: 1px solid var(--accent); border-radius: 6px; }
   .editor textarea { width: 100%; min-height: 70px; font: inherit; font-size: 14px;
     background: var(--bg); color: var(--fg); border: 1px solid var(--rule);
     border-radius: 4px; padding: 8px; resize: vertical; }
   .editor .row { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; align-items: center; }
   .editor .status { font-size: 12px; color: var(--muted); margin-right: auto; }
-  .comment-item { background: var(--bg); border: 1px solid var(--rule);
-    border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; }
-  .comment-item:hover { border-color: var(--accent); }
-  .comment-item.mine { border-left: 3px solid var(--accent); }
-  .comment-item .anchor { color: var(--muted); font-size: 11px; font-style: italic;
-    margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .comment-item .body { white-space: pre-wrap; }
-  .comment-item .meta { font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; justify-content: space-between; }
-  .comment-item .del { font-size: 11px; padding: 2px 6px; }
-  .empty { color: var(--muted); font-style: italic; padding: 20px 4px; text-align: center; }
+
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 4px;
     font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 100; }
   .toast.show { opacity: 1; }
   .toast.err { background: #c53030; color: white; }
-  .doc-header { display: flex; justify-content: space-between; align-items: center;
-    font-size: 12px; color: var(--muted); margin-bottom: -32px; }
-  .doc-header a { color: var(--muted); }
-  @media (max-width: 900px) {
-    body { grid-template-columns: 1fr; }
-    aside { position: static; height: auto; border-left: none; border-top: 1px solid var(--rule); }
-    .block-btn { left: auto; right: 4px; }
+
+  @media (max-width: 600px) {
+    main { padding: 20px 14px 100px; }
+    body { font-size: 15px; }
+    h1 { font-size: 1.6em; } h2 { font-size: 1.3em; } h3 { font-size: 1.1em; }
+    .add-btn { right: 4px; top: 2px; padding: 3px 12px; font-size: 12px; }
   }
 </style>
 </head>
 <body>
-<main id="content">
-  <div class="doc-header">
-    <span>livespec · <a href="/">home</a></span>
-    <span>id: __DOC_ID__</span>
+<div class="topbar">
+  <div class="left">livespec · <a href="/">home</a> · <span>__DOC_ID__</span></div>
+  <div class="right">
+    <span class="count"><span id="count">0</span> comment(s)</span>
+    <button id="refresh" title="Refresh">↻</button>
+    <button id="copy-all" class="primary">Copy all</button>
   </div>
-</main>
-<aside>
-  <header>
-    <h2>Comments (<span id="count">0</span>)</h2>
-    <div class="actions">
-      <button id="refresh" title="Refresh">↻</button>
-      <button id="copy-all" class="primary">Copy all</button>
-    </div>
-  </header>
-  <div id="panel"></div>
-</aside>
+</div>
+<main id="content"></main>
 <div class="toast" id="toast"></div>
 <script id="md-source" type="text/markdown">__MARKDOWN__<\/script>
 <script>
@@ -312,23 +341,21 @@ const TEMPLATE = `<!doctype html>
   const DOC_ID = "__DOC_ID__";
   const API = "/api/docs/" + DOC_ID + "/comments";
 
-  // Stable per-browser author id (so a user can edit/delete their own).
   let AUTHOR = localStorage.getItem("livespec:author");
   if (!AUTHOR) {
     AUTHOR = "u-" + Math.random().toString(36).slice(2, 10);
     localStorage.setItem("livespec:author", AUTHOR);
   }
 
+  const TOUCH = matchMedia("(hover: none)").matches;
+
   const content = document.getElementById("content");
-  const panel = document.getElementById("panel");
   const countEl = document.getElementById("count");
   const toast = document.getElementById("toast");
 
   const md = document.getElementById("md-source").textContent;
-  const renderedDiv = document.createElement("div");
-  renderedDiv.id = "rendered";
-  renderedDiv.innerHTML = marked.parse(md);
-  content.appendChild(renderedDiv);
+  const rendered = document.createElement("div");
+  rendered.innerHTML = marked.parse(md);
 
   function hash(s) {
     let h = 5381;
@@ -346,21 +373,50 @@ const TEMPLATE = `<!doctype html>
     return t.length > (n || 200) ? t.slice(0, n || 200) + "…" : t;
   }
 
+  // Wrap each top-level block in a .block-wrap with an add button and a comments container.
   const blockSelectors = "h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,table";
-  const blocks = [...renderedDiv.querySelectorAll(":scope > " + blockSelectors)];
-  blocks.forEach((el, idx) => {
-    const text = el.textContent.trim();
-    const id = "b-" + idx + "-" + hash(text);
-    el.dataset.blockId = id;
-    el.classList.add("block");
+  const sourceBlocks = [...rendered.querySelectorAll(":scope > " + blockSelectors)];
+  const wraps = [];
+  sourceBlocks.forEach((el, idx) => {
+    const id = "b-" + idx + "-" + hash(el.textContent.trim());
+    const wrap = document.createElement("div");
+    wrap.className = "block-wrap";
+    wrap.dataset.blockId = id;
+    wrap.dataset.order = idx;
     const btn = document.createElement("button");
-    btn.className = "block-btn";
-    btn.title = "Add comment";
-    btn.textContent = "💬";
-    btn.onclick = (e) => { e.stopPropagation(); openEditor(el); };
-    el.appendChild(btn);
+    btn.className = "add-btn";
+    btn.type = "button";
+    btn.textContent = "+ comment";
+    btn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap); });
+    const commentsEl = document.createElement("div");
+    commentsEl.className = "block-comments";
+    wrap.appendChild(el);
+    wrap.appendChild(btn);
+    wrap.appendChild(commentsEl);
+    content.appendChild(wrap);
+    wraps.push(wrap);
   });
-  const blockEls = Object.fromEntries(blocks.map((el) => [el.dataset.blockId, el]));
+  const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
+
+  // Selection (mainly for touch; harmless on desktop).
+  let selected = null;
+  function select(wrap) {
+    if (selected && selected !== wrap) selected.classList.remove("selected");
+    selected = wrap;
+    if (wrap) wrap.classList.add("selected");
+  }
+  document.addEventListener("click", (e) => {
+    const wrap = e.target.closest(".block-wrap");
+    // Ignore clicks on the editor / add-btn / inline comments — their handlers take care of state.
+    if (e.target.closest(".editor, .add-btn, .inline-comment")) return;
+    if (wrap) {
+      // Don't steal text selection.
+      if (window.getSelection && !window.getSelection().isCollapsed) return;
+      select(wrap);
+    } else {
+      select(null);
+    }
+  });
 
   let COMMENTS = [];
 
@@ -369,30 +425,31 @@ const TEMPLATE = `<!doctype html>
       const res = await fetch(API, { cache: "no-store" });
       if (!res.ok) throw new Error(res.statusText);
       COMMENTS = await res.json();
-      renderPanel();
+      renderComments();
     } catch (e) {
       showToast("Failed to load comments", true);
     }
   }
 
-  function openEditor(el) {
-    if (el.nextSibling && el.nextSibling.classList && el.nextSibling.classList.contains("editor")) {
-      el.nextSibling.querySelector("textarea").focus();
-      return;
-    }
-    const mine = COMMENTS.find((c) => c.blockId === el.dataset.blockId && c.author === AUTHOR);
+  function openEditor(wrap) {
+    const existing = wrap.querySelector(":scope > .editor");
+    if (existing) { existing.querySelector("textarea").focus(); return; }
+    const mine = COMMENTS.find((c) => c.blockId === wrap.dataset.blockId && c.author === AUTHOR);
     const editor = document.createElement("div");
     editor.className = "editor";
     editor.innerHTML =
       '<textarea placeholder="Comment on this block…"></textarea>' +
       '<div class="row"><span class="status"></span>' +
-      '<button class="cancel">Cancel</button>' +
-      '<button class="primary save">Save</button></div>';
+      '<button class="cancel" type="button">Cancel</button>' +
+      '<button class="primary save" type="button">Save</button></div>';
     const ta = editor.querySelector("textarea");
     const status = editor.querySelector(".status");
     ta.value = mine ? mine.body : "";
-    editor.querySelector(".cancel").onclick = () => editor.remove();
-    editor.querySelector(".save").onclick = async () => {
+    editor.querySelector(".cancel").addEventListener("click", (e) => {
+      e.stopPropagation(); editor.remove();
+    });
+    editor.querySelector(".save").addEventListener("click", async (e) => {
+      e.stopPropagation();
       const text = ta.value.trim();
       status.textContent = "Saving…";
       try {
@@ -403,69 +460,66 @@ const TEMPLATE = `<!doctype html>
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              blockId: el.dataset.blockId,
-              anchor: snippet(el),
+              blockId: wrap.dataset.blockId,
+              anchor: snippet(wrap),
               body: text,
               author: AUTHOR,
-              order: blocks.indexOf(el),
+              order: Number(wrap.dataset.order),
             }),
           });
         }
         editor.remove();
         await refresh();
-      } catch (e) {
+      } catch (err) {
         status.textContent = "";
         showToast("Save failed", true);
       }
-    };
-    el.after(editor);
+    });
+    editor.addEventListener("click", (e) => e.stopPropagation());
+    // Insert before the comments container (i.e. last child) — so editor sits between block and existing comments.
+    wrap.insertBefore(editor, wrap.querySelector(":scope > .block-comments"));
     ta.focus();
     ta.selectionStart = ta.value.length;
   }
 
-  function renderPanel() {
+  function renderComments() {
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
     countEl.textContent = sorted.length;
-    for (const el of blocks) el.classList.remove("has-comment");
-    for (const c of sorted) {
-      const el = blockEls[c.blockId];
-      if (el) el.classList.add("has-comment");
-    }
-    if (!sorted.length) {
-      panel.innerHTML = '<div class="empty">No comments yet.<br>Hover a block and click 💬</div>';
-      return;
-    }
-    panel.innerHTML = "";
-    for (const c of sorted) {
-      const div = document.createElement("div");
-      div.className = "comment-item" + (c.author === AUTHOR ? " mine" : "");
-      const isMine = c.author === AUTHOR;
-      div.innerHTML =
-        '<div class="anchor"></div>' +
-        '<div class="body"></div>' +
-        '<div class="meta"><span class="who"></span>' +
-        (isMine ? '<button class="del">delete</button>' : "<span></span>") +
-        '</div>';
-      div.querySelector(".anchor").textContent = "“" + c.anchor + "”";
-      div.querySelector(".body").textContent = c.body;
-      div.querySelector(".who").textContent = isMine ? "you" : c.author;
-      div.onclick = () => {
-        const el = blockEls[c.blockId];
-        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); if (isMine) openEditor(el); }
-      };
-      if (isMine) {
-        div.querySelector(".del").onclick = async (e) => {
-          e.stopPropagation();
-          await fetch(API + "/" + c.cid + "?author=" + AUTHOR, { method: "DELETE" });
-          await refresh();
-        };
+    const byBlock = {};
+    for (const c of sorted) (byBlock[c.blockId] = byBlock[c.blockId] || []).push(c);
+    for (const wrap of wraps) {
+      const list = byBlock[wrap.dataset.blockId] || [];
+      wrap.classList.toggle("has-comment", list.length > 0);
+      const container = wrap.querySelector(":scope > .block-comments");
+      container.innerHTML = "";
+      for (const c of list) {
+        const div = document.createElement("div");
+        const isMine = c.author === AUTHOR;
+        div.className = "inline-comment" + (isMine ? " mine" : "");
+        div.innerHTML =
+          '<span class="body"></span>' +
+          '<span class="who"></span>' +
+          (isMine ? '<button class="del" type="button" title="Delete">×</button>' : "");
+        div.querySelector(".body").textContent = c.body;
+        div.querySelector(".who").textContent = isMine ? "you" : c.author;
+        if (isMine) {
+          div.addEventListener("click", (e) => {
+            if (e.target.classList.contains("del")) return;
+            openEditor(wrap);
+          });
+          div.querySelector(".del").addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await fetch(API + "/" + c.cid + "?author=" + AUTHOR, { method: "DELETE" });
+            await refresh();
+          });
+        }
+        container.appendChild(div);
       }
-      panel.appendChild(div);
     }
   }
 
-  document.getElementById("refresh").onclick = refresh;
-  document.getElementById("copy-all").onclick = async () => {
+  document.getElementById("refresh").addEventListener("click", refresh);
+  document.getElementById("copy-all").addEventListener("click", async () => {
     if (!COMMENTS.length) { showToast("No comments to copy"); return; }
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const out = ["# Comments on: " + document.title.replace(/ — livespec$/, ""), ""];
@@ -486,10 +540,9 @@ const TEMPLATE = `<!doctype html>
       ta.select(); document.execCommand("copy"); ta.remove();
       showToast("Copied " + sorted.length + " comment(s)");
     }
-  };
+  });
 
   refresh();
-  // Poll every 30s so collaborators' comments show up.
   setInterval(refresh, 30000);
 })();
 <\/script>
