@@ -286,9 +286,12 @@ const TEMPLATE = `<!doctype html>
     border-bottom: 1px solid var(--rule);
     font-size: 13px;
   }
-  .topbar .left, .topbar .left a { color: var(--muted); }
-  .topbar .right { display: flex; gap: 6px; align-items: center; }
-  .topbar .count { color: var(--muted); margin-right: 4px; }
+  .topbar .count { color: var(--muted); }
+  .doc-footer {
+    max-width: 760px; margin: 40px auto 24px; padding: 16px 24px 0;
+    border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px;
+  }
+  .doc-footer a { color: var(--muted); }
 
   main { max-width: 760px; margin: 0 auto; padding: 28px 24px 120px; }
 
@@ -411,14 +414,11 @@ const TEMPLATE = `<!doctype html>
 </head>
 <body>
 <div class="topbar">
-  <div class="left">livespec · <a href="/">home</a> · <span>__DOC_ID__</span></div>
-  <div class="right">
-    <span class="count"><span id="approve-count">0</span> ✓ · <span id="count">0</span> comment(s)</span>
-    <button id="refresh" title="Refresh">↻</button>
-    <button id="copy-all" class="primary">Copy all</button>
-  </div>
+  <span class="count"><span id="approve-count">0</span> ✓ · <span id="count">0</span> comment(s)</span>
+  <button id="copy-all" class="primary">Copy all</button>
 </div>
 <main id="content"></main>
+<footer class="doc-footer">livespec · <a href="/">home</a> · <span>__DOC_ID__</span></footer>
 <div class="toast" id="toast"></div>
 <script id="md-source" type="text/markdown">__MARKDOWN__<\/script>
 <script>
@@ -724,7 +724,6 @@ const TEMPLATE = `<!doctype html>
     }
   }
 
-  document.getElementById("refresh").addEventListener("click", refresh);
   document.getElementById("copy-all").addEventListener("click", async () => {
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const cmts = sorted.filter((c) => (c.type || "comment") === "comment");
