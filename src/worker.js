@@ -309,36 +309,43 @@ const TEMPLATE = `<!doctype html>
   ul, ol { padding-left: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
 
-  .block-wrap { position: relative; padding: 2px 0; transition: background .15s; border-radius: 4px; }
-  @media (hover: hover) {
-    .block-wrap:hover { background: color-mix(in srgb, var(--accent-bg) 50%, transparent); }
+  .block-wrap { margin: 0; }
+  .block-text {
+    position: relative;
+    padding: 2px 8px 2px 8px;
+    margin: 0 -8px;
+    border-radius: 4px;
+    transition: background .12s;
   }
-  .block-wrap.selected { background: var(--accent-bg); }
+  .block-text > :first-child { margin-top: .3em; }
+  .block-text > :last-child { margin-bottom: .3em; }
+  @media (hover: hover) {
+    .block-text:hover { background: var(--accent-bg); }
+  }
+  .block-wrap.selected .block-text { background: var(--accent-bg); }
 
+  /* Actions sit at the bottom-right of the block, overlapping the last line if there's room. */
   .block-actions {
-    position: absolute; right: 4px; top: 6px;
+    position: absolute; right: 4px; bottom: 2px;
     display: flex; gap: 4px; align-items: center;
+    pointer-events: none;
   }
   .pill {
     font-size: 11px; padding: 2px 8px; border-radius: 10px;
-    background: transparent; color: var(--muted);
+    background: var(--bg); color: var(--muted);
     border: 1px solid var(--rule);
     cursor: pointer; line-height: 1.4;
-    transition: opacity .15s, color .1s, background .1s, border-color .1s;
+    transition: opacity .12s, color .1s, background .1s, border-color .1s;
   }
   .pill:hover { color: var(--accent); border-color: var(--accent); }
-  .add { opacity: 0; pointer-events: none; }
-  @media (hover: hover) {
-    .block-wrap:hover .add { opacity: .85; pointer-events: auto; }
-  }
+  .add { opacity: 0; }
+  @media (hover: hover) { .block-text:hover .add { opacity: .9; pointer-events: auto; } }
   .block-wrap.selected .add { opacity: 1; pointer-events: auto; }
   .add:hover { opacity: 1 !important; background: var(--accent); color: white; border-color: var(--accent); }
 
-  .approve { opacity: 0; pointer-events: none; }
+  .approve { opacity: 0; }
   .approve.has-any { opacity: .85; pointer-events: auto; }
-  @media (hover: hover) {
-    .block-wrap:hover .approve { opacity: 1; pointer-events: auto; }
-  }
+  @media (hover: hover) { .block-text:hover .approve { opacity: 1; pointer-events: auto; } }
   .block-wrap.selected .approve { opacity: 1; pointer-events: auto; }
   .approve.mine { background: var(--approve); color: white; border-color: var(--approve); opacity: 1; pointer-events: auto; }
   .approve.mine:hover { background: var(--approve); color: white; border-color: var(--approve); }
@@ -451,14 +458,12 @@ const TEMPLATE = `<!doctype html>
     wrap.dataset.blockId = id;
     wrap.dataset.order = idx;
 
+    // .block-text holds the original block + the action pills, and is the only thing that highlights on hover.
+    const blockText = document.createElement("div");
+    blockText.className = "block-text";
+
     const actions = document.createElement("div");
     actions.className = "block-actions";
-
-    const approveBtn = document.createElement("button");
-    approveBtn.className = "pill approve";
-    approveBtn.type = "button";
-    approveBtn.title = "Approve this block";
-    approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
 
     const addBtn = document.createElement("button");
     addBtn.className = "pill add";
@@ -466,36 +471,49 @@ const TEMPLATE = `<!doctype html>
     addBtn.textContent = "+ comment";
     addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
 
-    actions.appendChild(approveBtn);
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "pill approve";
+    approveBtn.type = "button";
+    approveBtn.title = "Approve this block";
+    approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
+
+    // Order matters: + comment on the left, ✓ on the right.
     actions.appendChild(addBtn);
+    actions.appendChild(approveBtn);
+
+    blockText.appendChild(el);
+    blockText.appendChild(actions);
 
     const commentsEl = document.createElement("div");
     commentsEl.className = "block-comments";
 
-    wrap.appendChild(el);
-    wrap.appendChild(actions);
+    wrap.appendChild(blockText);
     wrap.appendChild(commentsEl);
     content.appendChild(wrap);
     wraps.push(wrap);
   });
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
 
-  let selected = null;
-  function select(wrap) {
-    if (selected && selected !== wrap) selected.classList.remove("selected");
-    selected = wrap;
-    if (wrap) wrap.classList.add("selected");
-  }
-  document.addEventListener("click", (e) => {
-    if (e.target.closest(".editor, .pill, .inline-comment")) return;
-    const wrap = e.target.closest(".block-wrap");
-    if (wrap) {
-      if (window.getSelection && !window.getSelection().isCollapsed) return;
-      select(wrap);
-    } else {
-      select(null);
+  // Touch-only: tap a block to reveal the action pills. Desktop hover handles this in CSS.
+  const TOUCH = matchMedia("(hover: none)").matches;
+  if (TOUCH) {
+    let selected = null;
+    function select(wrap) {
+      if (selected && selected !== wrap) selected.classList.remove("selected");
+      selected = wrap;
+      if (wrap) wrap.classList.add("selected");
     }
-  });
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".editor, .pill, .inline-comment")) return;
+      const wrap = e.target.closest(".block-wrap");
+      if (wrap) {
+        if (window.getSelection && !window.getSelection().isCollapsed) return;
+        select(wrap);
+      } else {
+        select(null);
+      }
+    });
+  }
 
   let COMMENTS = [];
 
@@ -510,21 +528,35 @@ const TEMPLATE = `<!doctype html>
     }
   }
 
-  async function toggleApprove(wrap) {
-    try {
-      await fetch(API, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          type: "approve",
-          blockId: wrap.dataset.blockId,
-          anchor: snippet(wrap),
-          author: AUTHOR,
-          order: Number(wrap.dataset.order),
-        }),
+  function toggleApprove(wrap) {
+    // Optimistic: flip local state and re-render immediately; fire-and-forget the server call.
+    const blockId = wrap.dataset.blockId;
+    const idx = COMMENTS.findIndex(
+      (c) => c.type === "approve" && c.blockId === blockId && c.author === AUTHOR,
+    );
+    if (idx >= 0) {
+      COMMENTS.splice(idx, 1);
+    } else {
+      COMMENTS.push({
+        cid: "tmp-" + Math.random().toString(36).slice(2, 8),
+        type: "approve", blockId, author: AUTHOR,
+        anchor: snippet(wrap),
+        order: Number(wrap.dataset.order),
+        created: Date.now(),
       });
-      await refresh();
-    } catch (e) { showToast("Failed", true); }
+    }
+    renderAll();
+    fetch(API, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "approve",
+        blockId,
+        anchor: snippet(wrap),
+        author: AUTHOR,
+        order: Number(wrap.dataset.order),
+      }),
+    }).then(() => refresh()).catch(() => showToast("Approve failed", true));
   }
 
   function openEditor(wrap, editingCid) {
@@ -584,7 +616,13 @@ const TEMPLATE = `<!doctype html>
       }
     });
     editor.addEventListener("click", (e) => e.stopPropagation());
-    wrap.appendChild(editor);
+    // Editing an existing comment: drop the editor in the comment's slot.
+    // New comments: append at the bottom of the comments list.
+    if (editingEl) {
+      editingEl.before(editor);
+    } else {
+      wrap.querySelector(":scope > .block-comments").appendChild(editor);
+    }
     ta.focus();
     ta.selectionStart = ta.value.length;
   }
