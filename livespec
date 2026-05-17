@@ -63,10 +63,24 @@ def cmd_comments(doc_id):
     if not arr:
         print("(no comments)"); return
     doc = req("GET", f"/api/docs/{doc_id}")
-    print(f"# Comments on: {doc['title']}\n")
+    print(f"# Review of: {doc['title']}\n")
+    # Group by block: collect approvals + comment bodies in order.
+    groups = {}
     for c in arr:
-        anchor = c["anchor"].replace("\n", "\n> ")
-        print(f"> {anchor}\n\n{c['body']}\n\n_— {c['author']}_\n\n---\n")
+        bid = c["blockId"]
+        g = groups.setdefault(bid, {"anchor": c.get("anchor", ""), "order": c.get("order", 0), "approved": False, "items": []})
+        if c.get("type") == "approve":
+            g["approved"] = True
+        else:
+            g["items"].append(c["body"])
+    for bid, g in sorted(groups.items(), key=lambda kv: kv[1]["order"]):
+        anchor = g["anchor"].replace("\n", "\n> ")
+        print(f"> {anchor}\n")
+        if g["approved"]:
+            print("✓ approved\n")
+        for body in g["items"]:
+            print(f"{body}\n")
+        print("---\n")
 
 def cmd_list():
     for did, meta in load_store().items():

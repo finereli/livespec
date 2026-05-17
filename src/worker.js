@@ -135,27 +135,62 @@ export default {
       }
       if (sub === "comments" && !cid && req.method === "POST") {
         const body = await req.json().catch(() => null);
-        if (!body || !body.blockId || !body.body) return bad("blockId and body required");
-        const comments = await loadComments(env, id);
-        // Upsert by (blockId, author)
+        if (!body || !body.blockId) return bad("blockId required");
         const author = body.author || "anon";
-        const existing = comments.findIndex(
-          (c) => c.blockId === body.blockId && c.author === author,
-        );
+        const type = body.type === "approve" ? "approve" : "comment";
+        const comments = await loadComments(env, id);
+        if (type === "approve") {
+          // Toggle: one approval per (blockId, author).
+          const idx = comments.findIndex(
+            (c) => c.type === "approve" && c.blockId === body.blockId && c.author === author,
+          );
+          if (idx >= 0) {
+            comments.splice(idx, 1);
+            await saveComments(env, id, comments);
+            return json({ ok: true, approved: false });
+          }
+          const entry = {
+            cid: randId(10), type: "approve",
+            blockId: body.blockId,
+            anchor: (body.anchor || "").slice(0, 500),
+            author,
+            order: typeof body.order === "number" ? body.order : 0,
+            created: Date.now(),
+          };
+          comments.push(entry);
+          await saveComments(env, id, comments);
+          return json({ ok: true, approved: true, cid: entry.cid }, 201);
+        }
+        if (!body.body) return bad("body required for comment");
         const entry = {
-          cid: existing >= 0 ? comments[existing].cid : randId(10),
+          cid: randId(10), type: "comment",
           blockId: body.blockId,
           anchor: (body.anchor || "").slice(0, 500),
           body: String(body.body).slice(0, 5000),
           author,
           order: typeof body.order === "number" ? body.order : 0,
-          created: existing >= 0 ? comments[existing].created : Date.now(),
+          created: Date.now(),
           updated: Date.now(),
         };
-        if (existing >= 0) comments[existing] = entry;
-        else comments.push(entry);
+        comments.push(entry);
         await saveComments(env, id, comments);
         return json(entry, 201);
+      }
+      if (sub === "comments" && cid && req.method === "PUT") {
+        const body = await req.json().catch(() => null);
+        if (!body || !body.body) return bad("body required");
+        const author = body.author || req.headers.get("x-author");
+        const editToken = req.headers.get("x-edit-token");
+        const comments = await loadComments(env, id);
+        const idx = comments.findIndex((c) => c.cid === cid);
+        if (idx < 0) return notFound("comment not found");
+        const c = comments[idx];
+        if (c.type !== "comment") return bad("only comments can be edited");
+        if (c.author !== author && editToken !== doc.editToken) return forbidden("not your comment");
+        c.body = String(body.body).slice(0, 5000);
+        c.updated = Date.now();
+        await saveComments(env, id, comments);
+        return json(c);
       }
       if (sub === "comments" && cid && req.method === "DELETE") {
         const author = req.headers.get("x-author") || url.searchParams.get("author");
@@ -215,33 +250,39 @@ const TEMPLATE = `<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
 <style>
   :root {
-    --bg: #fafaf7; --fg: #1a1a1a; --muted: #6b6b6b;
-    --rule: #e4e2dc; --accent: #b8541a; --accent-bg: #fdf1e7;
-    --code-bg: #f0ede4;
+    --bg: #fafaf7; --fg: #1a1a1a; --muted: #7a7569;
+    --rule: #e4e2dc; --accent: #b8541a; --accent-2: #8a3e13;
+    --accent-bg: #fdf1e7; --code-bg: #f0ede4;
+    --approve: #4a7a3a; --approve-bg: #ecf3e6;
+    --link: var(--accent);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1a1a1a; --fg: #e8e6e0; --muted: #999; --rule: #333;
-      --accent: #e08a4a; --accent-bg: #2a1d12; --code-bg: #252525; }
+    :root { --bg: #1a1a1a; --fg: #e8e6e0; --muted: #9a948a;
+      --rule: #333; --accent: #e08a4a; --accent-2: #f5a368;
+      --accent-bg: #2a1d12; --code-bg: #252525;
+      --approve: #7aa86a; --approve-bg: #1d2a18; }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
   body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
 
+  a { color: var(--link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--link); }
+
   .topbar {
     position: sticky; top: 0; z-index: 10;
     display: flex; justify-content: space-between; align-items: center;
-    padding: 10px 20px; gap: 10px;
+    padding: 10px 16px; gap: 10px;
     background: color-mix(in srgb, var(--bg) 92%, transparent);
     backdrop-filter: blur(6px);
     border-bottom: 1px solid var(--rule);
     font-size: 13px;
   }
-  .topbar .left { color: var(--muted); }
-  .topbar .left a { color: var(--muted); }
+  .topbar .left, .topbar .left a { color: var(--muted); }
   .topbar .right { display: flex; gap: 6px; align-items: center; }
   .topbar .count { color: var(--muted); margin-right: 4px; }
 
-  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 120px; }
+  main { max-width: 760px; margin: 0 auto; padding: 28px 24px 120px; }
 
   button { font: inherit; font-size: 12px; background: var(--bg); color: var(--fg);
     border: 1px solid var(--rule); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
@@ -249,7 +290,7 @@ const TEMPLATE = `<!doctype html>
   button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   button.primary:hover { opacity: .9; color: white; }
 
-  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 .4em; }
+  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 .4em; }
   h1 { font-size: 2em; border-bottom: 1px solid var(--rule); padding-bottom: .3em; }
   h2 { font-size: 1.5em; } h3 { font-size: 1.2em; }
   p { margin: .8em 0; }
@@ -260,53 +301,72 @@ const TEMPLATE = `<!doctype html>
   ul, ol { padding-left: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
 
-  .block-wrap { position: relative; margin: 0 -10px; padding: 0 10px; border-radius: 6px; transition: background .15s; }
-  .block-wrap > :first-child { margin-top: .4em; }
+  .block-wrap { position: relative; padding: 2px 0; transition: background .15s; border-radius: 4px; }
   @media (hover: hover) {
-    .block-wrap:hover { background: var(--accent-bg); }
+    .block-wrap:hover { background: color-mix(in srgb, var(--accent-bg) 50%, transparent); }
   }
   .block-wrap.selected { background: var(--accent-bg); }
-  .block-wrap.has-comment { box-shadow: inset 3px 0 0 var(--accent); }
 
-  .add-btn {
-    position: absolute; right: 6px; top: 4px;
-    font-size: 11px; padding: 2px 10px;
-    background: var(--accent); color: white;
-    border: none; border-radius: 10px;
-    opacity: 0; pointer-events: none;
-    transition: opacity .15s;
+  .block-actions {
+    position: absolute; right: 4px; top: 6px;
+    display: flex; gap: 4px; align-items: center;
   }
+  .pill {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--rule);
+    cursor: pointer; line-height: 1.4;
+    transition: opacity .15s, color .1s, background .1s, border-color .1s;
+  }
+  .pill:hover { color: var(--accent); border-color: var(--accent); }
+  .add { opacity: 0; pointer-events: none; }
   @media (hover: hover) {
-    .block-wrap:hover .add-btn { opacity: .9; pointer-events: auto; }
+    .block-wrap:hover .add { opacity: .85; pointer-events: auto; }
   }
-  .block-wrap.selected .add-btn { opacity: 1; pointer-events: auto; }
-  .add-btn:hover { opacity: 1 !important; color: white; }
+  .block-wrap.selected .add { opacity: 1; pointer-events: auto; }
+  .add:hover { opacity: 1 !important; background: var(--accent); color: white; border-color: var(--accent); }
+
+  .approve { opacity: 0; pointer-events: none; }
+  .approve.has-any { opacity: .85; pointer-events: auto; }
+  @media (hover: hover) {
+    .block-wrap:hover .approve { opacity: 1; pointer-events: auto; }
+  }
+  .block-wrap.selected .approve { opacity: 1; pointer-events: auto; }
+  .approve.mine { background: var(--approve); color: white; border-color: var(--approve); opacity: 1; pointer-events: auto; }
+  .approve.mine:hover { background: var(--approve); color: white; border-color: var(--approve); }
+  .approve:hover { color: var(--approve); border-color: var(--approve); }
 
   .block-comments { margin: 4px 0 12px; }
   .inline-comment {
     font-size: 13px; font-style: italic; color: var(--muted);
     border-left: 2px solid var(--accent);
     padding: 4px 10px; margin: 4px 0;
-    background: color-mix(in srgb, var(--accent-bg) 60%, transparent);
+    background: color-mix(in srgb, var(--accent-bg) 55%, transparent);
     border-radius: 0 4px 4px 0;
-    display: flex; gap: 8px; align-items: flex-start;
+    display: flex; gap: 6px; align-items: flex-start;
   }
   .inline-comment .body { flex: 1; white-space: pre-wrap; }
-  .inline-comment .who { font-style: normal; font-size: 11px; opacity: .7; flex-shrink: 0; }
   .inline-comment.mine { cursor: pointer; }
   .inline-comment.mine:hover { background: var(--accent-bg); color: var(--fg); }
+  .inline-comment.editing { display: none; }
   .inline-comment .del {
-    font-style: normal; font-size: 11px; padding: 0 6px; opacity: 0;
-    background: transparent; border: none; color: var(--muted);
+    font-style: normal; font-size: 12px; padding: 0 6px; opacity: 0;
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    line-height: 1;
   }
   .inline-comment.mine:hover .del { opacity: 1; }
   .inline-comment .del:hover { color: var(--accent); }
 
   .editor { margin: 6px 0 12px; padding: 10px; background: var(--accent-bg);
-    border: 1px solid var(--accent); border-radius: 6px; }
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 6px; }
   .editor textarea { width: 100%; min-height: 70px; font: inherit; font-size: 14px;
     background: var(--bg); color: var(--fg); border: 1px solid var(--rule);
-    border-radius: 4px; padding: 8px; resize: vertical; }
+    border-radius: 4px; padding: 8px; resize: vertical;
+    outline: none; transition: border-color .1s, box-shadow .1s; }
+  .editor textarea:focus {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--rule));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
   .editor .row { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; align-items: center; }
   .editor .status { font-size: 12px; color: var(--muted); margin-right: auto; }
 
@@ -316,11 +376,13 @@ const TEMPLATE = `<!doctype html>
   .toast.show { opacity: 1; }
   .toast.err { background: #c53030; color: white; }
 
-  @media (max-width: 600px) {
-    main { padding: 20px 14px 100px; }
+  @media (max-width: 700px) {
+    main { padding: 16px 12px 100px; max-width: none; }
     body { font-size: 15px; }
-    h1 { font-size: 1.6em; } h2 { font-size: 1.3em; } h3 { font-size: 1.1em; }
-    .add-btn { right: 4px; top: 2px; padding: 3px 12px; font-size: 12px; }
+    h1 { font-size: 1.55em; } h2 { font-size: 1.25em; } h3 { font-size: 1.1em; }
+    .topbar { padding: 8px 12px; }
+    .block-actions { top: 4px; right: 2px; }
+    .pill { padding: 3px 10px; font-size: 12px; }
   }
 </style>
 </head>
@@ -347,8 +409,6 @@ const TEMPLATE = `<!doctype html>
     localStorage.setItem("livespec:author", AUTHOR);
   }
 
-  const TOUCH = matchMedia("(hover: none)").matches;
-
   const content = document.getElementById("content");
   const countEl = document.getElementById("count");
   const toast = document.getElementById("toast");
@@ -373,7 +433,6 @@ const TEMPLATE = `<!doctype html>
     return t.length > (n || 200) ? t.slice(0, n || 200) + "…" : t;
   }
 
-  // Wrap each top-level block in a .block-wrap with an add button and a comments container.
   const blockSelectors = "h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,table";
   const sourceBlocks = [...rendered.querySelectorAll(":scope > " + blockSelectors)];
   const wraps = [];
@@ -383,22 +442,36 @@ const TEMPLATE = `<!doctype html>
     wrap.className = "block-wrap";
     wrap.dataset.blockId = id;
     wrap.dataset.order = idx;
-    const btn = document.createElement("button");
-    btn.className = "add-btn";
-    btn.type = "button";
-    btn.textContent = "+ comment";
-    btn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap); });
+
+    const actions = document.createElement("div");
+    actions.className = "block-actions";
+
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "pill approve";
+    approveBtn.type = "button";
+    approveBtn.title = "Approve this block";
+    approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "pill add";
+    addBtn.type = "button";
+    addBtn.textContent = "+ comment";
+    addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
+
+    actions.appendChild(approveBtn);
+    actions.appendChild(addBtn);
+
     const commentsEl = document.createElement("div");
     commentsEl.className = "block-comments";
+
     wrap.appendChild(el);
-    wrap.appendChild(btn);
+    wrap.appendChild(actions);
     wrap.appendChild(commentsEl);
     content.appendChild(wrap);
     wraps.push(wrap);
   });
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
 
-  // Selection (mainly for touch; harmless on desktop).
   let selected = null;
   function select(wrap) {
     if (selected && selected !== wrap) selected.classList.remove("selected");
@@ -406,11 +479,9 @@ const TEMPLATE = `<!doctype html>
     if (wrap) wrap.classList.add("selected");
   }
   document.addEventListener("click", (e) => {
+    if (e.target.closest(".editor, .pill, .inline-comment")) return;
     const wrap = e.target.closest(".block-wrap");
-    // Ignore clicks on the editor / add-btn / inline comments — their handlers take care of state.
-    if (e.target.closest(".editor, .add-btn, .inline-comment")) return;
     if (wrap) {
-      // Don't steal text selection.
       if (window.getSelection && !window.getSelection().isCollapsed) return;
       select(wrap);
     } else {
@@ -425,16 +496,34 @@ const TEMPLATE = `<!doctype html>
       const res = await fetch(API, { cache: "no-store" });
       if (!res.ok) throw new Error(res.statusText);
       COMMENTS = await res.json();
-      renderComments();
+      renderAll();
     } catch (e) {
       showToast("Failed to load comments", true);
     }
   }
 
-  function openEditor(wrap) {
-    const existing = wrap.querySelector(":scope > .editor");
-    if (existing) { existing.querySelector("textarea").focus(); return; }
-    const mine = COMMENTS.find((c) => c.blockId === wrap.dataset.blockId && c.author === AUTHOR);
+  async function toggleApprove(wrap) {
+    try {
+      await fetch(API, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "approve",
+          blockId: wrap.dataset.blockId,
+          anchor: snippet(wrap),
+          author: AUTHOR,
+          order: Number(wrap.dataset.order),
+        }),
+      });
+      await refresh();
+    } catch (e) { showToast("Failed", true); }
+  }
+
+  function openEditor(wrap, editingCid) {
+    // Hide the inline comment being edited (if any).
+    const editingEl = editingCid ? wrap.querySelector('.inline-comment[data-cid="' + editingCid + '"]') : null;
+    if (editingEl) editingEl.classList.add("editing");
+
     const editor = document.createElement("div");
     editor.className = "editor";
     editor.innerHTML =
@@ -444,22 +533,33 @@ const TEMPLATE = `<!doctype html>
       '<button class="primary save" type="button">Save</button></div>';
     const ta = editor.querySelector("textarea");
     const status = editor.querySelector(".status");
-    ta.value = mine ? mine.body : "";
+    if (editingCid) {
+      const c = COMMENTS.find((x) => x.cid === editingCid);
+      if (c) ta.value = c.body;
+    }
     editor.querySelector(".cancel").addEventListener("click", (e) => {
-      e.stopPropagation(); editor.remove();
+      e.stopPropagation();
+      if (editingEl) editingEl.classList.remove("editing");
+      editor.remove();
     });
     editor.querySelector(".save").addEventListener("click", async (e) => {
       e.stopPropagation();
       const text = ta.value.trim();
+      if (!text) { status.textContent = "Empty"; return; }
       status.textContent = "Saving…";
       try {
-        if (!text && mine) {
-          await fetch(API + "/" + mine.cid + "?author=" + AUTHOR, { method: "DELETE" });
-        } else if (text) {
+        if (editingCid) {
+          await fetch(API + "/" + editingCid, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ body: text, author: AUTHOR }),
+          });
+        } else {
           await fetch(API, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
+              type: "comment",
               blockId: wrap.dataset.blockId,
               anchor: snippet(wrap),
               body: text,
@@ -476,36 +576,49 @@ const TEMPLATE = `<!doctype html>
       }
     });
     editor.addEventListener("click", (e) => e.stopPropagation());
-    // Insert before the comments container (i.e. last child) — so editor sits between block and existing comments.
-    wrap.insertBefore(editor, wrap.querySelector(":scope > .block-comments"));
+    wrap.appendChild(editor);
     ta.focus();
     ta.selectionStart = ta.value.length;
   }
 
-  function renderComments() {
+  function renderAll() {
+    const onlyComments = COMMENTS.filter((c) => (c.type || "comment") === "comment");
+    countEl.textContent = onlyComments.length;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
-    countEl.textContent = sorted.length;
-    const byBlock = {};
-    for (const c of sorted) (byBlock[c.blockId] = byBlock[c.blockId] || []).push(c);
+    const cmtByBlock = {}, apprByBlock = {};
+    for (const c of sorted) {
+      if ((c.type || "comment") === "approve") {
+        (apprByBlock[c.blockId] = apprByBlock[c.blockId] || []).push(c);
+      } else {
+        (cmtByBlock[c.blockId] = cmtByBlock[c.blockId] || []).push(c);
+      }
+    }
     for (const wrap of wraps) {
-      const list = byBlock[wrap.dataset.blockId] || [];
-      wrap.classList.toggle("has-comment", list.length > 0);
+      // Approvals
+      const apps = apprByBlock[wrap.dataset.blockId] || [];
+      const mine = apps.some((a) => a.author === AUTHOR);
+      const approveBtn = wrap.querySelector(":scope > .block-actions > .approve");
+      approveBtn.classList.toggle("has-any", apps.length > 0);
+      approveBtn.classList.toggle("mine", mine);
+      approveBtn.textContent = "✓" + (apps.length > 1 ? " " + apps.length : "");
+
+      // Comments
+      const list = cmtByBlock[wrap.dataset.blockId] || [];
       const container = wrap.querySelector(":scope > .block-comments");
       container.innerHTML = "";
       for (const c of list) {
         const div = document.createElement("div");
         const isMine = c.author === AUTHOR;
         div.className = "inline-comment" + (isMine ? " mine" : "");
+        div.dataset.cid = c.cid;
         div.innerHTML =
           '<span class="body"></span>' +
-          '<span class="who"></span>' +
           (isMine ? '<button class="del" type="button" title="Delete">×</button>' : "");
         div.querySelector(".body").textContent = c.body;
-        div.querySelector(".who").textContent = isMine ? "you" : c.author;
         if (isMine) {
           div.addEventListener("click", (e) => {
             if (e.target.classList.contains("del")) return;
-            openEditor(wrap);
+            openEditor(wrap, c.cid);
           });
           div.querySelector(".del").addEventListener("click", async (e) => {
             e.stopPropagation();
@@ -520,25 +633,38 @@ const TEMPLATE = `<!doctype html>
 
   document.getElementById("refresh").addEventListener("click", refresh);
   document.getElementById("copy-all").addEventListener("click", async () => {
-    if (!COMMENTS.length) { showToast("No comments to copy"); return; }
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    const out = ["# Comments on: " + document.title.replace(/ — livespec$/, ""), ""];
+    const cmts = sorted.filter((c) => (c.type || "comment") === "comment");
+    const approvedBlocks = new Set(sorted.filter((c) => c.type === "approve").map((c) => c.blockId));
+    if (!cmts.length && !approvedBlocks.size) { showToast("Nothing to copy"); return; }
+    const out = ["# Review of: " + document.title.replace(/ — livespec$/, ""), ""];
+    // Group comments by block, with approval marker.
+    const byBlock = {};
+    for (const c of cmts) (byBlock[c.blockId] = byBlock[c.blockId] || { anchor: c.anchor, order: c.order, items: [] }).items.push(c.body);
+    // Add approved-only blocks (no comments) so they appear too.
     for (const c of sorted) {
-      out.push("> " + c.anchor.split("\\n").join("\\n> "));
+      if (c.type === "approve" && !byBlock[c.blockId]) {
+        byBlock[c.blockId] = { anchor: c.anchor, order: c.order, items: [] };
+      }
+    }
+    const groups = Object.entries(byBlock).sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
+    for (const [blockId, g] of groups) {
+      out.push("> " + g.anchor.split("\\n").join("\\n> "));
       out.push("");
-      out.push(c.body + (c.author === AUTHOR ? "" : "  \\n_— " + c.author + "_"));
+      if (approvedBlocks.has(blockId)) out.push("✓ approved");
+      for (const body of g.items) out.push(body);
       out.push("");
       out.push("---");
       out.push("");
     }
     try {
       await navigator.clipboard.writeText(out.join("\\n"));
-      showToast("Copied " + sorted.length + " comment(s)");
+      showToast("Copied " + groups.length + " block(s)");
     } catch {
       const ta = document.createElement("textarea");
       ta.value = out.join("\\n"); document.body.appendChild(ta);
       ta.select(); document.execCommand("copy"); ta.remove();
-      showToast("Copied " + sorted.length + " comment(s)");
+      showToast("Copied " + groups.length + " block(s)");
     }
   });
 
