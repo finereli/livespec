@@ -62,7 +62,7 @@ Block-level UI:
 1. Hovering (desktop) or tapping (touch) a block reveals `+ comment` and `✓` pills at its bottom-right (under the table, for tables).
 2. `+ comment` opens an inline editor under the block; multiple comments per block stack vertically. Each browser can edit and delete its own comments.
 3. `✓` toggles an approval for the block. The UI flips instantly; the server call fires in the background.
-4. The sticky topbar shows `N approved · M comment(s)`, a version chip, and a **Copy all** button that puts a clean quoted-context dump on the clipboard.
+4. The sticky topbar shows `N/T approved · M comment(s)`, a version chip, and a **Copy all** button. Approvals are reviewer-side tracking; **Copy all** dumps only the comments — the things the agent actually has to act on.
 
 The page does not poll. Comments and approvals load once on page load. If the agent updates the doc, the human reloads.
 
