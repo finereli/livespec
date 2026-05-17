@@ -387,9 +387,9 @@ const TEMPLATE = `<!doctype html>
 
   .editor { margin: 6px 0 12px; padding: 10px; background: var(--accent-bg);
     border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 6px; }
-  .editor textarea { width: 100%; min-height: 70px; font: inherit; font-size: 14px;
+  .editor textarea { width: 100%; font: inherit; font-size: 14px; line-height: 1.5;
     background: var(--bg); color: var(--fg); border: 1px solid var(--rule);
-    border-radius: 4px; padding: 8px; resize: vertical;
+    border-radius: 4px; padding: 6px 8px; resize: none; overflow: hidden;
     outline: none; transition: border-color .1s, box-shadow .1s; }
   .editor textarea:focus {
     border-color: color-mix(in srgb, var(--accent) 60%, var(--rule));
@@ -587,16 +587,29 @@ const TEMPLATE = `<!doctype html>
     const editor = document.createElement("div");
     editor.className = "editor";
     editor.innerHTML =
-      '<textarea placeholder="Comment on this block…"></textarea>' +
+      '<textarea rows="1" placeholder="Comment on this block…"></textarea>' +
       '<div class="row"><span class="status"></span>' +
       '<button class="cancel" type="button">Cancel</button>' +
       '<button class="primary save" type="button">Save</button></div>';
     const ta = editor.querySelector("textarea");
     const status = editor.querySelector(".status");
+    const saveBtn = editor.querySelector(".save");
     if (editingCid) {
       const c = COMMENTS.find((x) => x.cid === editingCid);
       if (c) ta.value = c.body;
     }
+    // Autogrow.
+    const autosize = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+    ta.addEventListener("input", autosize);
+    // Desktop: Enter submits, Shift+Enter inserts newline. Touch: Enter always newlines.
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !TOUCH) {
+        e.preventDefault();
+        saveBtn.click();
+      }
+    });
+    // Run autosize after the textarea is in the DOM (scrollHeight is 0 otherwise).
+    queueMicrotask(autosize);
     editor.querySelector(".cancel").addEventListener("click", (e) => {
       e.stopPropagation();
       if (editingEl) editingEl.classList.remove("editing");
