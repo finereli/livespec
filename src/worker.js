@@ -456,8 +456,13 @@ const TEMPLATE = `<!doctype html>
     toast.classList.add("show");
     setTimeout(() => toast.classList.remove("show"), 1800);
   }
-  function snippet(el, n) {
-    const t = el.textContent.replace(/\\s+/g, " ").trim();
+  function snippet(wrap, n) {
+    // Read only the source block text — exclude action pills and any rendered comments.
+    const text = wrap.querySelector(".block-text");
+    if (!text) return "";
+    const clone = text.cloneNode(true);
+    clone.querySelectorAll(".block-actions").forEach((el) => el.remove());
+    const t = clone.textContent.replace(/\\s+/g, " ").trim();
     return t.length > (n || 200) ? t.slice(0, n || 200) + "…" : t;
   }
 
@@ -773,7 +778,6 @@ const TEMPLATE = `<!doctype html>
   });
 
   refresh();
-  setInterval(refresh, 30000);
 })();
 <\/script>
 </body>

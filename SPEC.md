@@ -1,26 +1,24 @@
 # livespec
 
-A tiny service for reviewing markdown documents (specs, plans, designs) outside the chat window. Upload markdown, get a URL, hover over any block to leave a comment, copy all comments back into the conversation with one click.
+A tiny service for reviewing markdown documents (specs, plans, designs) outside the chat window. Upload markdown, get a URL, hover or tap any block to leave a comment or tick a green ✓, copy the whole review back into the conversation with one click.
 
 ## Why this exists
 
 Reviewing long agent-produced specs inside a terminal/chat interface is painful. You scroll past things, lose your place, can't easily attach feedback to a specific paragraph. Rendering specs as HTML with per-block comments lets you read at your own pace and respond precisely.
 
-The previous iteration generated standalone HTML files with localStorage-only comments. This version is a deployed service so the agent and the human share the same source of truth, and comments persist across browsers and devices.
-
 ## Goals
 
-- Frictionless upload and update from an agent (one curl call, no auth setup).
+- Frictionless upload and update from an agent (one `curl` call, no auth setup).
 - Identical, predictable UI on every document — muscle memory for the reviewer.
-- Comments anchored to specific blocks of the document, survive minor edits.
-- Reviewer can dump all comments back into a conversation as quoted-context + body.
+- Comments and approvals anchored to specific blocks; survive minor markdown edits.
+- Reviewer can dump the whole review back into a conversation as quoted-context + body.
 - Cheap to run, zero ops, no database — Cloudflare Worker + KV.
 
-## Non-goals (MVP)
+## Non-goals
 
-- Multi-user auth, accounts, permissions. Edit token per doc is enough.
-- Threaded discussions or replies. Each block holds one comment per browser.
-- Real-time presence or live cursors. A 30s poll is fine.
+- Multi-user auth, accounts, permissions. An edit token per doc is enough.
+- Threaded discussions or replies. Each block holds a flat list of comments.
+- Real-time collaboration. The workflow is one human reviewer ↔ one agent.
 - Rich-text or WYSIWYG editing of the source markdown.
 - Versioning / diffs of the document itself.
 
@@ -31,45 +29,57 @@ Single Cloudflare Worker (`src/worker.js`) backed by one KV namespace (`LIVESPEC
 KV keys:
 
 - `doc:{id}` — JSON `{ title, markdown, editToken, created, updated }`
-- `comments:{id}` — JSON array of `{ cid, blockId, anchor, body, author, order, created, updated }`
+- `comments:{id}` — JSON array. Each entry is either a comment (`type: "comment"`, has `body`) or an approval (`type: "approve"`, no body, at most one per `blockId` per author).
 
-IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex chars. Author IDs are generated client-side and stored in `localStorage` so a browser can edit/delete its own comments.
+IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex chars. Author IDs are generated client-side in `localStorage` so a browser can edit or delete its own entries.
 
 ## HTTP API
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/` or `/api/docs` | none | Create a doc. Body = raw markdown. Returns `{id, editToken, url}`. |
+| `POST` | `/` | none | Create a doc. Body = raw markdown. Returns `{id, editToken, url}`. |
 | `GET` | `/:id` | none | Rendered HTML view. |
-| `PUT` | `/:id` or `/api/docs/:id` | `x-edit-token` | Replace markdown. |
-| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete doc + comments. |
-| `GET` | `/api/docs/:id` | none | Fetch doc JSON. |
-| `GET` | `/api/docs/:id/comments` | none | List comments + approvals. |
-| `POST` | `/api/docs/:id/comments` | none | Add a comment (always new) or toggle an approval (`type: "approve"`). |
+| `PUT` | `/:id` | `x-edit-token` | Replace markdown. Wipes all comments and approvals (see below). |
+| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete the doc. |
+| `GET` | `/api/docs/:id` | none | Fetch raw doc JSON. |
+| `GET` | `/api/docs/:id/comments` | none | List comments and approvals. |
+| `POST` | `/api/docs/:id/comments` | none | Add a comment, or toggle an approval (`type: "approve"`). |
 | `PUT` | `/api/docs/:id/comments/:cid` | author | Edit a comment body. |
-| `DELETE` | `/api/docs/:id/comments/:cid?author=…` | author or edit token | Delete a comment or approval. |
+| `DELETE` | `/api/docs/:id/comments/:cid` | author or edit token | Remove a comment or approval. |
 
 ## Frontend
 
-Server returns an HTML page per doc. The page embeds the markdown in a `<script type="text/markdown">` tag and renders client-side with [marked.js](https://marked.js.org/) from a CDN. After render:
+Server returns one HTML page per doc. It embeds the markdown in a `<script type="text/markdown">` tag and renders client-side with [marked.js](https://marked.js.org/) from a CDN. After render:
 
-1. Walk top-level block elements (`h1–h6, p, ul, ol, pre, blockquote, table`).
-2. Assign each a stable id: `b-{index}-{djb2hash(textContent)}`. Editing a block invalidates its id and orphans its comment — acceptable for MVP.
-3. Hovering shows a 💬 button. Clicking opens an inline editor under the block. Save POSTs to `/api/docs/:id/comments`.
-4. Side panel lists comments in document order, with "Copy all" (clipboard) and per-comment delete (own comments only).
-5. Poll the comments endpoint every 30s so collaborators' notes appear.
+1. Top-level blocks (`h1–h6, p, li, pre, blockquote, table`) get a stable id: `b-{index}-{djb2hash(textContent)}`. List items split into one block per `<li>`. Editing a block changes its hash and orphans its comments — see lifecycle below.
+2. Hovering (desktop) or tapping (touch) a block reveals `+ comment` and `✓` pills at its bottom-right (under the table, for tables).
+3. `+ comment` opens an inline editor under the block; multiple comments per block stack vertically. Each browser can edit and delete its own comments.
+4. `✓` toggles an approval for the block. The UI flips instantly; the server call fires in the background.
+5. The sticky topbar shows `N approved · M comment(s)` and a **Copy all** button that puts a clean quoted-context dump on the clipboard.
 
-## Agent workflow
+The page does not poll. Comments and approvals load once on page load. If the agent updates the doc, the human reloads.
 
-A tiny Python CLI at `livespec` wraps the API and stores edit tokens in `~/.livespec/tokens.json`:
+## Comment lifecycle
 
-```
-livespec upload SPEC.md           # prints the URL
-livespec update <id> SPEC.md      # uses stored token
-livespec comments <id>            # prints comments as quoted markdown
-```
+- Comments live as long as the doc.
+- `PUT /:id` (replacing the markdown) **clears every comment and approval**. The expectation is that the agent has already fetched the current review, applied the edits, and is uploading the post-review version.
+- This keeps the model trivial: no orphan-detection, no block-by-block migration, no stale notes piling up. The reviewer's previous round is preserved in the conversation history (via *Copy all* → paste), not in the server.
 
-The agent uploads a spec, gives the human the URL, polls or asks for comments, applies them, and re-uploads with `update`. Round trips stay short and the conversation stays clean.
+Alternative considered: preserve approvals on blocks whose hash didn't change, but drop comments. Rejected for the MVP — adds an axis of behavior to reason about. Easy to add later if a use case appears.
+
+## Agent ↔ human flow
+
+1. Agent produces a markdown spec, `POST /` → URL.
+2. Agent shares the URL with the human.
+3. Human reads in browser, leaves comments / ✓s, clicks **Copy all**, pastes the result back into the conversation.
+4. Agent reads the pasted review, edits the spec, `PUT /:id` → same URL.
+5. Human reloads the tab and continues.
+
+Only the human writes to the comment store today. There's no flow for the agent to add its own comments or replies. **Open question:** is that worth building? The copy-paste round trip is cheap and visible; programmatic agent-side comments would be more powerful but add a moving part (the agent needs author identity, the human needs to distinguish their voice from the agent's, etc.).
+
+## Tooling
+
+The API is small enough that `curl` is the primary client. A tiny Python CLI (`./livespec`) is included for convenience — it stores edit tokens in `~/.livespec/tokens.json` so you don't have to track them yourself — but it's optional.
 
 ## Deployment
 
@@ -80,20 +90,9 @@ wrangler deploy                          # ships worker
 
 `wrangler.toml` pins the KV id and a custom-domain route at `livespec.finereli.com`. No build step, no framework, no bundler.
 
-## Tradeoffs and open questions
+## Open questions
 
-- **Comment durability vs. doc edits.** Block hashes are stable as long as a block's text doesn't change. A heavier scheme (fuzzy match on edit, manual re-anchoring) would survive edits but adds significant complexity. MVP accepts orphaning.
-- **Concurrency on comments.** A KV read-modify-write race could lose a comment if two people save in the same ~100ms. Acceptable at this scale; would move to Durable Objects if it bit us.
-- **Spam / abuse.** Anyone with a URL can comment. URLs are unguessable (8 chars from a 32-char alphabet ≈ 40 bits) so this is link-secret, not access-controlled. Add a per-doc "comments closed" toggle if needed.
-- **Rendering fidelity.** marked.js handles common GFM but not custom directives. Server-side render with a richer parser is a later optimization.
-- **No history.** A `PUT` overwrites; old markdown and orphaned comments are lost. Keeping the last N versions in KV would be trivial if needed.
-
-## What "done" looks like for the MVP
-
-- `livespec.finereli.com` resolves to the worker.
-- `curl -X POST .../api/docs --data-binary @file.md` returns a working URL.
-- Opening the URL renders the document with the comment UI.
-- Comments persist across page reloads and across browsers.
-- "Copy all" produces a clean quoted-context dump suitable for pasting into a chat.
-
-This document itself is the first real test.
+- **Agent-side write.** As above — let the agent post comments/replies, or keep it copy-paste only.
+- **Soft preserve approvals.** Keep ✓s across `PUT` when a block's hash didn't change.
+- **Read-only / locked mode.** A flag on a doc to freeze comments after the review round closes.
+- **Auth on update.** The edit token is currently the only gate on `PUT`. Fine for a personal tool; not fine if the URL leaks.
