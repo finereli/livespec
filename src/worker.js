@@ -308,6 +308,19 @@ const TEMPLATE = `<!doctype html>
   blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .3em 1em; color: var(--muted); }
   ul, ol { padding-left: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
+  /* Side-scroll tables that exceed the viewport, with shadow affordances at the edges. */
+  .table-scroll {
+    overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--bg) 30%, transparent) left center,
+      linear-gradient(to left, var(--bg) 30%, transparent) right center,
+      radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.18), transparent) left center,
+      radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.18), transparent) right center;
+    background-repeat: no-repeat;
+    background-size: 28px 100%, 28px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .table-scroll table { width: 100%; }
 
   .block-wrap { margin: 0; }
   .block-text {
@@ -481,7 +494,14 @@ const TEMPLATE = `<!doctype html>
     actions.appendChild(addBtn);
     actions.appendChild(approveBtn);
 
-    blockText.appendChild(el);
+    if (el.tagName === "TABLE") {
+      const tw = document.createElement("div");
+      tw.className = "table-scroll";
+      tw.appendChild(el);
+      blockText.appendChild(tw);
+    } else {
+      blockText.appendChild(el);
+    }
     blockText.appendChild(actions);
 
     const commentsEl = document.createElement("div");
