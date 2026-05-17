@@ -96,6 +96,7 @@ function renderBlocks(md) {
         blockId: blockIdFor(idx++, tok.raw),
         isList: false,
         isTable: tok.type === "table",
+        isHeading: tok.type === "heading",
         html: marked.parse(tok.raw || "").trim(),
       });
     }
@@ -113,6 +114,10 @@ function renderDocBody(md) {
   let order = 0;
   for (const b of blocks) {
     if (b.noBlock) { parts.push(b.html); continue; }
+    // Headings render as plain HTML — no comment / approve pills (not useful).
+    // Their blockId still exists in renderBlocks so non-heading blockIds stay
+    // stable and carry-forward keeps working.
+    if (b.isHeading) { parts.push(b.html); continue; }
     const wrapClass = "block-wrap" + (b.isList ? " is-list" : "");
     const textClass = "block-text" + (b.isTable ? " is-table" : "");
     let inner = b.html;
@@ -667,7 +672,7 @@ const TEMPLATE = `<!doctype html>
 <body>
 <div class="topbar">
   <a class="brand" href="/">livespec</a>
-  <span class="count"><span id="approve-count">0</span> approved · <span id="count">0</span> <span id="count-label">comments</span></span>
+  <span class="count"><span id="approve-count">0</span>/<span id="block-total">0</span> approved · <span id="count">0</span> <span id="count-label">comments</span></span>
   <div class="version-menu">
     <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
     <div id="version-list" class="version-list"></div>
@@ -766,6 +771,7 @@ __DOC_BODY__
   // action pills in place. Hydrate by wiring event handlers.
   const wraps = [...content.querySelectorAll(":scope > .block-wrap")];
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
+  document.getElementById("block-total").textContent = wraps.length;
   for (const wrap of wraps) {
     const addBtn = wrap.querySelector(".pill.add");
     const approveBtn = wrap.querySelector(".pill.approve");
