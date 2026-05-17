@@ -405,7 +405,7 @@ const TEMPLATE = `<!doctype html>
 <div class="topbar">
   <div class="left">livespec · <a href="/">home</a> · <span>__DOC_ID__</span></div>
   <div class="right">
-    <span class="count"><span id="count">0</span> comment(s)</span>
+    <span class="count"><span id="approve-count">0</span> ✓ · <span id="count">0</span> comment(s)</span>
     <button id="refresh" title="Refresh">↻</button>
     <button id="copy-all" class="primary">Copy all</button>
   </div>
@@ -630,6 +630,8 @@ const TEMPLATE = `<!doctype html>
   function renderAll() {
     const onlyComments = COMMENTS.filter((c) => (c.type || "comment") === "comment");
     countEl.textContent = onlyComments.length;
+    const approvedBlockIds = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
+    document.getElementById("approve-count").textContent = approvedBlockIds.size;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
     const cmtByBlock = {}, apprByBlock = {};
     for (const c of sorted) {
