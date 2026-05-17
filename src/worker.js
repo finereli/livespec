@@ -396,7 +396,7 @@ const TEMPLATE = `<!doctype html>
     body { font-size: 15px; }
     h1 { font-size: 1.55em; } h2 { font-size: 1.25em; } h3 { font-size: 1.1em; }
     .topbar { padding: 8px 12px; }
-    .block-actions { top: 4px; right: 2px; }
+    .block-actions { right: 2px; bottom: 2px; }
     .pill { padding: 3px 10px; font-size: 12px; }
   }
 </style>
@@ -643,7 +643,7 @@ const TEMPLATE = `<!doctype html>
       // Approvals
       const apps = apprByBlock[wrap.dataset.blockId] || [];
       const mine = apps.some((a) => a.author === AUTHOR);
-      const approveBtn = wrap.querySelector(":scope > .block-actions > .approve");
+      const approveBtn = wrap.querySelector(".approve");
       approveBtn.classList.toggle("has-any", apps.length > 0);
       approveBtn.classList.toggle("mine", mine);
       approveBtn.textContent = "✓" + (apps.length > 1 ? " " + apps.length : "");
