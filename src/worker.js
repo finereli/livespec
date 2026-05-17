@@ -597,12 +597,16 @@ const TEMPLATE = `<!doctype html>
   }
 
   function openEditor(wrap, editingCid) {
+    // If an editor for the same slot is already open, just focus it.
+    const existing = wrap.querySelector('.editor[data-editing="' + (editingCid || "new") + '"]');
+    if (existing) { existing.querySelector("textarea").focus(); return; }
     // Hide the inline comment being edited (if any).
     const editingEl = editingCid ? wrap.querySelector('.inline-comment[data-cid="' + editingCid + '"]') : null;
     if (editingEl) editingEl.classList.add("editing");
 
     const editor = document.createElement("div");
     editor.className = "editor";
+    editor.dataset.editing = editingCid || "new";
     editor.innerHTML =
       '<textarea rows="1" placeholder="Comment on this block…"></textarea>' +
       '<div class="row"><span class="status"></span>' +
