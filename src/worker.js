@@ -43,6 +43,97 @@ function firstH1(md) {
   return m ? m[1].trim() : "Untitled";
 }
 
+// --- markdown rendering ---------------------------------------------------
+// Render once on the server. Returns an array of { blockId, isTable, isList,
+// html } in document order. The client just inserts these into the page and
+// reads blockIds off the elements — no client-side markdown parsing.
+
+function djb2(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+const BLOCK_TYPES = new Set(["heading", "paragraph", "code", "blockquote", "table", "html"]);
+
+function blockIdFor(idx, raw) {
+  // Hash the raw markdown of the block. Stable across renders, sensitive to
+  // any text change in the block.
+  return "b-" + idx + "-" + djb2((raw || "").trim());
+}
+
+function renderBlocks(md) {
+  const tokens = marked.lexer(md);
+  const out = [];
+  let idx = 0;
+  for (const tok of tokens) {
+    if (tok.type === "space" || tok.type === "hr") {
+      // hr is rendered inline but isn't commentable.
+      if (tok.type === "hr") out.push({ html: "<hr>", noBlock: true });
+      continue;
+    }
+    if (tok.type === "list") {
+      // One block per item; wrap each in a fresh list to preserve bullet/numbering.
+      const tag = tok.ordered ? "ol" : "ul";
+      const startBase = typeof tok.start === "number" ? tok.start : 1;
+      for (let i = 0; i < tok.items.length; i++) {
+        const item = tok.items[i];
+        const itemHtml = marked.parse(item.raw || "").trim();
+        // marked.parse wraps with a fresh <ul>/<ol>; renumber if ordered.
+        let html = itemHtml;
+        if (tok.ordered) {
+          html = html.replace(/^<ol[^>]*>/, `<ol start="${startBase + i}">`);
+        }
+        out.push({
+          blockId: blockIdFor(idx++, item.raw),
+          isList: true,
+          isTable: false,
+          html,
+        });
+      }
+    } else if (BLOCK_TYPES.has(tok.type)) {
+      out.push({
+        blockId: blockIdFor(idx++, tok.raw),
+        isList: false,
+        isTable: tok.type === "table",
+        html: marked.parse(tok.raw || "").trim(),
+      });
+    }
+  }
+  return out;
+}
+
+// Server-side render of the full document body. Wraps each block in the
+// scaffold the client expects, with data attributes for blockId / order /
+// flags. Action pills and comments container are placeholders the client
+// fills in.
+function renderDocBody(md) {
+  const blocks = renderBlocks(md);
+  const parts = [];
+  let order = 0;
+  for (const b of blocks) {
+    if (b.noBlock) { parts.push(b.html); continue; }
+    const wrapClass = "block-wrap" + (b.isList ? " is-list" : "");
+    const textClass = "block-text" + (b.isTable ? " is-table" : "");
+    let inner = b.html;
+    if (b.isTable) inner = `<div class="table-scroll">${inner}</div>`;
+    parts.push(
+      `<div class="${wrapClass}" data-block-id="${b.blockId}" data-order="${order}">` +
+        `<div class="${textClass}">` +
+          inner +
+          `<div class="block-actions">` +
+            `<button class="pill add" type="button">+ comment</button>` +
+            `<button class="pill approve" type="button" title="Approve this block"></button>` +
+          `</div>` +
+        `</div>` +
+        `<div class="block-comments"></div>` +
+      `</div>`
+    );
+    order++;
+  }
+  return parts.join("\n");
+}
+
 // Storage layout (versioned, with legacy fallback):
 //   doc:{id}                -> { title, editToken, currentVersion, versions:[{v,created}],
 //                                created, updated }
@@ -143,6 +234,22 @@ async function updateDoc(req, env, id) {
 
   const next = doc.currentVersion + 1;
   await env.LIVESPEC.put(`doc:${id}:v${next}`, JSON.stringify({ markdown: md, created: now }));
+
+  // Carry forward approvals on blocks that still exist (same blockId) in the
+  // new version. Comments do NOT carry forward — they belong to the round
+  // they were written for.
+  const prev = await loadVersionComments(env, id, doc, doc.currentVersion);
+  const prevApprovals = prev.filter((c) => c.type === "approve");
+  if (prevApprovals.length) {
+    const newIds = new Set(renderBlocks(md).map((b) => b.blockId).filter(Boolean));
+    const carried = prevApprovals
+      .filter((a) => newIds.has(a.blockId))
+      .map((a) => ({ ...a, cid: randId(10), created: now }));
+    if (carried.length) {
+      await env.LIVESPEC.put(`comments:${id}:v${next}`, JSON.stringify(carried));
+    }
+  }
+
   const versions = (doc.versions || []).concat([{ v: next, created: now }]);
   await env.LIVESPEC.put("doc:" + id, JSON.stringify({
     title: firstH1(md),
@@ -341,14 +448,9 @@ export default {
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-function escapeScript(s) {
-  // Prevent breaking out of <script type="text/markdown">
-  return s.replace(/<\/script>/gi, "<\\/script>");
-}
-
 function renderHtml(id, doc, viewingVersion, markdown) {
   const title = escapeHtml(doc.title || "Untitled");
-  const md = escapeScript(markdown);
+  const body = renderDocBody(markdown);
   const isReadonly = viewingVersion !== doc.currentVersion;
   const versionsJson = JSON.stringify(doc.versions || []);
   return TEMPLATE
@@ -358,7 +460,7 @@ function renderHtml(id, doc, viewingVersion, markdown) {
     .replace(/__CURRENT_VERSION__/g, String(doc.currentVersion))
     .replace("__VERSIONS_JSON__", versionsJson)
     .replace(/__READONLY__/g, isReadonly ? "true" : "false")
-    .replace("__MARKDOWN__", md);
+    .replace("__DOC_BODY__", body);
 }
 
 const TEMPLATE = `<!doctype html>
@@ -368,7 +470,6 @@ const TEMPLATE = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>__TITLE__ — livespec</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iaWNvbiI+PHJlY3QgeD0iMzIiIHk9IjMyIiB3aWR0aD0iNDQ4IiBoZWlnaHQ9IjQ0OCIgcng9IjcyIiBmaWxsPSIjMWUyOTNiIi8+PHBhdGggZD0iTTEyMCAxMjggSDE3NiBWMTYwIEgxNTIgVjM1MiBIMTc2IFYzODQgSDEyMCBaIiBmaWxsPSIjZDlmOTlkIi8+PHBhdGggZD0iTTM5MiAxMjggSDMzNiBWMTYwIEgzNjAgVjM1MiBIMzM2IFYzODQgSDM5MiBaIiBmaWxsPSIjZDlmOTlkIi8+PHJlY3QgeD0iMTkyIiB5PSIxODQiIHdpZHRoPSIxMjgiIGhlaWdodD0iMjgiIHJ4PSIxNCIgZmlsbD0iI2Y4ZmFmYyIvPjxyZWN0IHg9IjE5MiIgeT0iMjQyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNmOGZhZmMiLz48cmVjdCB4PSIxOTIiIHk9IjMwMCIgd2lkdGg9IjcyIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNiZWYyNjQiLz48L2c+PC9zdmc+">
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
 <style>
   :root {
     --bg: #fafaf7; --fg: #1a1a1a; --muted: #7a7569;
@@ -577,10 +678,11 @@ const TEMPLATE = `<!doctype html>
   Read-only · viewing v<span id="rb-viewing">?</span> of <span id="rb-current">?</span>.
   <a id="rb-latest" href="/__DOC_ID__">Go to latest →</a>
 </div>
-<main id="content"></main>
+<main id="content">
+__DOC_BODY__
+</main>
 <footer class="doc-footer">__DOC_ID__ · v__VIEWING_VERSION__</footer>
 <div class="toast" id="toast"></div>
-<script id="md-source" type="text/markdown">__MARKDOWN__<\/script>
 <script>
 (function () {
   const DOC_ID = "__DOC_ID__";
@@ -644,15 +746,6 @@ const TEMPLATE = `<!doctype html>
   const countEl = document.getElementById("count");
   const toast = document.getElementById("toast");
 
-  const md = document.getElementById("md-source").textContent;
-  const rendered = document.createElement("div");
-  rendered.innerHTML = marked.parse(md);
-
-  function hash(s) {
-    let h = 5381;
-    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-    return (h >>> 0).toString(36);
-  }
   function showToast(msg, err) {
     toast.textContent = msg;
     toast.classList.toggle("err", !!err);
@@ -669,75 +762,16 @@ const TEMPLATE = `<!doctype html>
     return t.length > (n || 200) ? t.slice(0, n || 200) + "…" : t;
   }
 
-  const blockSelectors = "h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,table";
-  const sourceBlocks = [...rendered.querySelectorAll(":scope > " + blockSelectors)];
-  const wraps = [];
-  let order = 0;
-
-  function buildBlock(contentEl, isTable, isList) {
-    const idx = order++;
-    const id = "b-" + idx + "-" + hash(contentEl.textContent.trim());
-    const wrap = document.createElement("div");
-    wrap.className = "block-wrap" + (isList ? " is-list" : "");
-    wrap.dataset.blockId = id;
-    wrap.dataset.order = idx;
-
-    const blockText = document.createElement("div");
-    blockText.className = "block-text" + (isTable ? " is-table" : "");
-
-    const actions = document.createElement("div");
-    actions.className = "block-actions";
-
-    const addBtn = document.createElement("button");
-    addBtn.className = "pill add";
-    addBtn.type = "button";
-    addBtn.textContent = "+ comment";
-    addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
-
-    const approveBtn = document.createElement("button");
-    approveBtn.className = "pill approve";
-    approveBtn.type = "button";
-    approveBtn.title = "Approve this block";
-    approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
-
-    actions.appendChild(addBtn);
-    actions.appendChild(approveBtn);
-
-    if (isTable) {
-      const tw = document.createElement("div");
-      tw.className = "table-scroll";
-      tw.appendChild(contentEl);
-      blockText.appendChild(tw);
-    } else {
-      blockText.appendChild(contentEl);
-    }
-    blockText.appendChild(actions);
-
-    const commentsEl = document.createElement("div");
-    commentsEl.className = "block-comments";
-
-    wrap.appendChild(blockText);
-    wrap.appendChild(commentsEl);
-    content.appendChild(wrap);
-    wraps.push(wrap);
-  }
-
-  sourceBlocks.forEach((el) => {
-    // Split lists so each <li> is its own commentable block. Re-wrap each item
-    // in a fresh <ul>/<ol> to preserve bullets / numbering.
-    if (el.tagName === "UL" || el.tagName === "OL") {
-      const items = [...el.children].filter((c) => c.tagName === "LI");
-      items.forEach((li, i) => {
-        const listClone = document.createElement(el.tagName);
-        if (el.tagName === "OL") listClone.setAttribute("start", String(i + 1));
-        listClone.appendChild(li);
-        buildBlock(listClone, false, true);
-      });
-    } else {
-      buildBlock(el, el.tagName === "TABLE", false);
-    }
-  });
+  // The document body is already rendered by the server, with block-wraps and
+  // action pills in place. Hydrate by wiring event handlers.
+  const wraps = [...content.querySelectorAll(":scope > .block-wrap")];
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
+  for (const wrap of wraps) {
+    const addBtn = wrap.querySelector(".pill.add");
+    const approveBtn = wrap.querySelector(".pill.approve");
+    if (addBtn) addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
+    if (approveBtn) approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
+  }
 
   // Touch-only: tap a block to reveal the action pills. Desktop hover handles this in CSS.
   const TOUCH = matchMedia("(hover: none)").matches;

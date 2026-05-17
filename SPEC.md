@@ -53,13 +53,16 @@ IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex c
 
 ## Frontend
 
-Server returns one HTML page per doc. It embeds the markdown in a `<script type="text/markdown">` tag and renders client-side with [marked.js](https://marked.js.org/) from a CDN. After render:
+The server parses markdown with marked.js, walks the block tokens, and renders the full document body. Each top-level block (`h1–h6, p, li, pre, blockquote, table`) is wrapped in a `<div class="block-wrap" data-block-id="…">` with the action pills already in place. Lists are split into one wrap per `<li>`, each rewrapped in a fresh `<ul>`/`<ol>` so bullets and numbering stay correct.
 
-1. Top-level blocks (`h1–h6, p, li, pre, blockquote, table`) get a stable id: `b-{index}-{djb2hash(textContent)}`. List items split into one block per `<li>`. Editing a block changes its hash and orphans its comments — see lifecycle below.
-2. Hovering (desktop) or tapping (touch) a block reveals `+ comment` and `✓` pills at its bottom-right (under the table, for tables).
-3. `+ comment` opens an inline editor under the block; multiple comments per block stack vertically. Each browser can edit and delete its own comments.
-4. `✓` toggles an approval for the block. The UI flips instantly; the server call fires in the background.
-5. The sticky topbar shows `N approved · M comment(s)` and a **Copy all** button that puts a clean quoted-context dump on the clipboard.
+The HTML reaches the browser fully rendered — no client-side markdown step, no parser download. The client script just walks `.block-wrap` elements, attaches handlers, and fetches the comments for the version it's looking at.
+
+Block-level UI:
+
+1. Hovering (desktop) or tapping (touch) a block reveals `+ comment` and `✓` pills at its bottom-right (under the table, for tables).
+2. `+ comment` opens an inline editor under the block; multiple comments per block stack vertically. Each browser can edit and delete its own comments.
+3. `✓` toggles an approval for the block. The UI flips instantly; the server call fires in the background.
+4. The sticky topbar shows `N approved · M comment(s)`, a version chip, and a **Copy all** button that puts a clean quoted-context dump on the clipboard.
 
 The page does not poll. Comments and approvals load once on page load. If the agent updates the doc, the human reloads.
 
@@ -72,9 +75,9 @@ Every `PUT /:id` snapshots a new version of the doc. Old versions stay reachable
 - The topbar shows a version chip with a dropdown listing every version and how long ago it was written. Switching to an older version drops the page into read-only mode (no `+ comment`, no `✓`, no editing).
 - Comment writes always target the current version. The server rejects mutations on `/api/docs/:id/v:n/...` for any `n` other than current.
 
-This matches how the agent ↔ human loop already works — round by round. The reviewer's notes from v2 stay attached to v2 forever; v3 starts clean for the next pass.
+This matches how the agent ↔ human loop already works — round by round. The reviewer's notes from v2 stay attached to v2 forever; v3 starts clean for the next pass — *except* for approvals, which carry forward on a block if its text didn't change. Approvals are claims about the content ("this block is fine"); if the content survives a rewrite untouched, the approval still applies. Comments are conversational and stay with the round they were written for.
 
-What this gives up: there's no automatic carry-forward of approvals to blocks whose text didn't change across versions. If you re-approve the same paragraph in v4 that you approved in v3, you click the ✓ again. Soft-preserve-on-unchanged-hash is on the open-questions list.
+Carry-forward works because the server is the single source of truth for blockIds — it renders the markdown, assigns each block a `b-{order}-{djb2(raw)}` id, and serves the HTML with those ids already baked in. On `PUT`, the server recomputes blockIds for the new markdown and copies any approval whose blockId is still present.
 
 ## Agent ↔ human flow
 
@@ -102,7 +105,6 @@ wrangler deploy                          # ships worker
 ## Open questions
 
 - **Agent-side write.** As above — let the agent post comments/replies, or keep it copy-paste only.
-- **Soft preserve approvals.** Carry forward ✓s into the next version when a block's hash didn't change.
 - **Lock current.** A "freeze the current version" toggle for when a review round is over but you don't want to bump a version yet.
 - **Version pruning.** Cap retained versions to a sensible N to keep KV usage bounded for chatty docs.
 - **Auth on update.** The edit token is currently the only gate on `PUT`. Fine for a personal tool; not fine if the URL leaks.
