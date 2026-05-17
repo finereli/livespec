@@ -56,6 +56,38 @@ async function saveComments(env, id, arr) {
   await env.LIVESPEC.put("comments:" + id, JSON.stringify(arr));
 }
 
+async function createDoc(req, url, env) {
+  const md = await req.text();
+  if (!md.trim()) return bad("empty markdown");
+  const id = randId();
+  const editToken = randToken();
+  const now = Date.now();
+  await saveDoc(env, id, {
+    title: firstH1(md), markdown: md, editToken, created: now, updated: now,
+  });
+  const base = url.origin;
+  return json({
+    id, editToken,
+    url: `${base}/${id}`,
+    rawUrl: `${base}/api/docs/${id}`,
+    commentsUrl: `${base}/api/docs/${id}/comments`,
+  }, 201);
+}
+
+async function updateDoc(req, env, id) {
+  const doc = await loadDoc(env, id);
+  if (!doc) return notFound("doc not found");
+  const token = req.headers.get("x-edit-token");
+  if (token !== doc.editToken) return forbidden("invalid edit token");
+  const md = await req.text();
+  if (!md.trim()) return bad("empty markdown");
+  doc.markdown = md;
+  doc.title = firstH1(md);
+  doc.updated = Date.now();
+  await saveDoc(env, id, doc);
+  return json({ id, title: doc.title, updated: doc.updated });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -63,35 +95,18 @@ export default {
 
     if (req.method === "OPTIONS") return json({}, 204);
 
-    // Landing
+    // Root: GET → landing, POST → create doc.
     if (pathname === "/" || pathname === "") {
-      return new Response(LANDING_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      if (req.method === "POST") return createDoc(req, url, env);
+      if (req.method === "GET") {
+        return new Response(LANDING_HTML, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
     }
-
-    // --- API: create doc ---
+    // API alias for create.
     if (pathname === "/api/docs" && req.method === "POST") {
-      const md = await req.text();
-      if (!md.trim()) return bad("empty markdown");
-      const id = randId();
-      const editToken = randToken();
-      const now = Date.now();
-      await saveDoc(env, id, {
-        title: firstH1(md),
-        markdown: md,
-        editToken,
-        created: now,
-        updated: now,
-      });
-      const base = url.origin;
-      return json({
-        id,
-        editToken,
-        url: `${base}/${id}`,
-        rawUrl: `${base}/api/docs/${id}`,
-        commentsUrl: `${base}/api/docs/${id}/comments`,
-      }, 201);
+      return createDoc(req, url, env);
     }
 
     // --- API: doc routes /api/docs/:id[/comments[/:cid]] ---
@@ -109,17 +124,7 @@ export default {
         });
       }
       // PUT doc (update markdown; requires edit token)
-      if (!sub && req.method === "PUT") {
-        const token = req.headers.get("x-edit-token");
-        if (token !== doc.editToken) return forbidden("invalid edit token");
-        const md = await req.text();
-        if (!md.trim()) return bad("empty markdown");
-        doc.markdown = md;
-        doc.title = firstH1(md);
-        doc.updated = Date.now();
-        await saveDoc(env, id, doc);
-        return json({ id, title: doc.title, updated: doc.updated });
-      }
+      if (!sub && req.method === "PUT") return updateDoc(req, env, id);
       // DELETE doc (requires edit token)
       if (!sub && req.method === "DELETE") {
         const token = req.headers.get("x-edit-token");
@@ -208,16 +213,19 @@ export default {
       }
     }
 
-    // --- HTML: render doc ---
+    // --- /:id — GET renders HTML; PUT updates markdown (edit token required). ---
     const docMatch = pathname.match(/^\/([a-z0-9]{4,})\/?$/);
-    if (docMatch && req.method === "GET") {
+    if (docMatch) {
       const id = docMatch[1];
-      const doc = await loadDoc(env, id);
-      if (!doc) return new Response("Not found", { status: 404 });
-      const html = renderHtml(id, doc);
-      return new Response(html, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      if (req.method === "PUT") return updateDoc(req, env, id);
+      if (req.method === "GET") {
+        const doc = await loadDoc(env, id);
+        if (!doc) return new Response("Not found", { status: 404 });
+        const html = renderHtml(id, doc);
+        return new Response(html, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
     }
 
     return notFound();
@@ -676,28 +684,55 @@ const TEMPLATE = `<!doctype html>
 </html>`;
 
 const LANDING_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>livespec</title>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>livespec — review markdown documents</title>
 <style>
-body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:640px;margin:60px auto;padding:0 24px;color:#1a1a1a;background:#fafaf7}
-h1{font-size:2em;margin-bottom:.2em}
-.tag{color:#6b6b6b;margin-top:0}
-code,pre{background:#f0ede4;padding:.1em .35em;border-radius:3px;font-size:.9em}
-pre{padding:14px;overflow-x:auto}
-@media (prefers-color-scheme: dark){body{background:#1a1a1a;color:#e8e6e0}code,pre{background:#252525}}
+:root { --bg:#fafaf7; --fg:#1a1a1a; --muted:#7a7569; --rule:#e4e2dc;
+  --accent:#b8541a; --code-bg:#f0ede4; --link:var(--accent); }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#1a1a1a; --fg:#e8e6e0; --muted:#9a948a; --rule:#333;
+    --accent:#e08a4a; --code-bg:#252525; }
+}
+* { box-sizing: border-box; }
+body { font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  max-width:680px; margin:0 auto; padding:60px 24px 40px; color:var(--fg); background:var(--bg); }
+h1 { font-size:2em; margin-bottom:.1em; }
+h2 { font-size:1.2em; margin-top:1.8em; border-bottom:1px solid var(--rule); padding-bottom:.2em; }
+.tag { color:var(--muted); margin-top:0; font-size:1.05em; }
+a { color:var(--link); text-decoration:underline; text-decoration-color:color-mix(in srgb, var(--link) 40%, transparent); text-underline-offset:2px; }
+a:hover { text-decoration-color:var(--link); }
+code, pre { background:var(--code-bg); padding:.1em .35em; border-radius:3px; font-size:.9em; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre { padding:12px 14px; overflow-x:auto; line-height:1.45; }
+.lede { font-size:1.05em; }
+hr { border:none; border-top:1px solid var(--rule); margin:3em 0 1.5em; }
+footer { color:var(--muted); font-size:13px; text-align:center; }
+footer a { color:var(--muted); }
+@media (max-width:600px) { body { padding:32px 16px; } }
 </style></head><body>
 <h1>livespec</h1>
 <p class="tag">Upload markdown · get a URL · collect per-block comments.</p>
 
+<p class="lede">A tiny service for reviewing markdown documents — specs, plans, design notes — outside the chat window. POST a markdown file, get back a URL. Open it in a browser, hover any paragraph to leave a comment or tap ✓ to approve. Click <em>Copy all</em> to dump every comment back into the conversation.</p>
+
+<p>Designed so an agent can drive the whole loop: upload a spec, share the URL with a human reviewer, fetch the comments, apply the edits, push a new version at the same URL. The reader's tab keeps working — comments persist across browsers and devices.</p>
+
 <h2>Upload a doc</h2>
-<pre>curl -X POST https://livespec.finereli.com/api/docs \\
-  --data-binary @spec.md</pre>
+<pre>curl -X POST https://livespec.finereli.com --data @spec.md</pre>
 <p>Returns <code>{ id, editToken, url }</code>. Save the <code>editToken</code> to update later.</p>
 
 <h2>Update a doc</h2>
-<pre>curl -X PUT https://livespec.finereli.com/api/docs/&lt;id&gt; \\
+<pre>curl -X PUT https://livespec.finereli.com/&lt;id&gt; \\
   -H "x-edit-token: &lt;token&gt;" \\
-  --data-binary @spec.md</pre>
+  --data @spec.md</pre>
 
-<h2>Get comments</h2>
+<h2>Read comments</h2>
 <pre>curl https://livespec.finereli.com/api/docs/&lt;id&gt;/comments</pre>
+<p>Returns a JSON array of <code>{ type, blockId, anchor, body, author, order }</code> — where <code>type</code> is <code>"comment"</code> or <code>"approve"</code>.</p>
+
+<h2>Source</h2>
+<p><a href="https://github.com/finereli/livespec">github.com/finereli/livespec</a> — single Cloudflare Worker, KV-backed, MIT-ish.</p>
+
+<hr>
+<footer>© <a href="https://finereli.com">Eli Finer</a></footer>
 </body></html>`;

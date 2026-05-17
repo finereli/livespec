@@ -39,14 +39,15 @@ IDs are 8 chars from a 32-char alphabet (no `0/1/l/o`). Edit tokens are 32 hex c
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/api/docs` | none | Create a doc. Body = raw markdown. Returns `{id, editToken, url}`. |
-| `GET` | `/api/docs/:id` | none | Fetch doc JSON. |
-| `PUT` | `/api/docs/:id` | `x-edit-token` | Replace markdown. |
-| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete doc + comments. |
-| `GET` | `/api/docs/:id/comments` | none | List comments. |
-| `POST` | `/api/docs/:id/comments` | none | Add/update comment (upsert by `blockId + author`). |
-| `DELETE` | `/api/docs/:id/comments/:cid?author=…` | author or edit token | Delete a comment. |
+| `POST` | `/` or `/api/docs` | none | Create a doc. Body = raw markdown. Returns `{id, editToken, url}`. |
 | `GET` | `/:id` | none | Rendered HTML view. |
+| `PUT` | `/:id` or `/api/docs/:id` | `x-edit-token` | Replace markdown. |
+| `DELETE` | `/api/docs/:id` | `x-edit-token` | Delete doc + comments. |
+| `GET` | `/api/docs/:id` | none | Fetch doc JSON. |
+| `GET` | `/api/docs/:id/comments` | none | List comments + approvals. |
+| `POST` | `/api/docs/:id/comments` | none | Add a comment (always new) or toggle an approval (`type: "approve"`). |
+| `PUT` | `/api/docs/:id/comments/:cid` | author | Edit a comment body. |
+| `DELETE` | `/api/docs/:id/comments/:cid?author=…` | author or edit token | Delete a comment or approval. |
 
 ## Frontend
 

@@ -39,7 +39,7 @@ def req(method, path, data=None, headers=None, raw=False):
 
 def cmd_upload(path):
     md = pathlib.Path(path).read_bytes()
-    res = req("POST", "/api/docs", data=md, headers={"content-type": "text/markdown"})
+    res = req("POST", "/", data=md, headers={"content-type": "text/markdown"})
     store = load_store()
     store[res["id"]] = {"editToken": res["editToken"], "source": str(pathlib.Path(path).resolve())}
     save_store(store)
@@ -50,7 +50,7 @@ def cmd_update(doc_id, path):
     if doc_id not in store:
         sys.stderr.write(f"No edit token stored for {doc_id}\n"); sys.exit(1)
     md = pathlib.Path(path).read_bytes()
-    res = req("PUT", f"/api/docs/{doc_id}", data=md,
+    res = req("PUT", f"/{doc_id}", data=md,
               headers={"x-edit-token": store[doc_id]["editToken"],
                        "content-type": "text/markdown"})
     store[doc_id]["source"] = str(pathlib.Path(path).resolve())

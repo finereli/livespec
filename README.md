@@ -15,9 +15,9 @@ Live at <https://livespec.finereli.com>. Full design notes in [SPEC.md](SPEC.md)
 Or with `curl`:
 
 ```bash
-curl -X POST https://livespec.finereli.com/api/docs --data-binary @SPEC.md
-curl -X PUT  https://livespec.finereli.com/api/docs/<id> \
-  -H "x-edit-token: <token>" --data-binary @SPEC.md
+curl -X POST https://livespec.finereli.com --data @SPEC.md
+curl -X PUT  https://livespec.finereli.com/<id> \
+  -H "x-edit-token: <token>" --data @SPEC.md
 curl https://livespec.finereli.com/api/docs/<id>/comments
 ```
 
