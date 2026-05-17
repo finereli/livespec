@@ -1,3 +1,5 @@
+import { marked } from "marked";
+
 // livespec — markdown documents with per-block comments.
 // Storage (KV binding `LIVESPEC`):
 //   doc:{id}        -> { title, markdown, editToken, created, updated }
@@ -365,6 +367,7 @@ const TEMPLATE = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>__TITLE__ — livespec</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iaWNvbiI+PHJlY3QgeD0iMzIiIHk9IjMyIiB3aWR0aD0iNDQ4IiBoZWlnaHQ9IjQ0OCIgcng9IjcyIiBmaWxsPSIjMWUyOTNiIi8+PHBhdGggZD0iTTEyMCAxMjggSDE3NiBWMTYwIEgxNTIgVjM1MiBIMTc2IFYzODQgSDEyMCBaIiBmaWxsPSIjZDlmOTlkIi8+PHBhdGggZD0iTTM5MiAxMjggSDMzNiBWMTYwIEgzNjAgVjM1MiBIMzM2IFYzODQgSDM5MiBaIiBmaWxsPSIjZDlmOTlkIi8+PHJlY3QgeD0iMTkyIiB5PSIxODQiIHdpZHRoPSIxMjgiIGhlaWdodD0iMjgiIHJ4PSIxNCIgZmlsbD0iI2Y4ZmFmYyIvPjxyZWN0IHg9IjE5MiIgeT0iMjQyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNmOGZhZmMiLz48cmVjdCB4PSIxOTIiIHk9IjMwMCIgd2lkdGg9IjcyIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNiZWYyNjQiLz48L2c+PC9zdmc+">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
 <style>
   :root {
@@ -987,6 +990,7 @@ const LANDING_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>livespec — review markdown documents</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iaWNvbiI+PHJlY3QgeD0iMzIiIHk9IjMyIiB3aWR0aD0iNDQ4IiBoZWlnaHQ9IjQ0OCIgcng9IjcyIiBmaWxsPSIjMWUyOTNiIi8+PHBhdGggZD0iTTEyMCAxMjggSDE3NiBWMTYwIEgxNTIgVjM1MiBIMTc2IFYzODQgSDEyMCBaIiBmaWxsPSIjZDlmOTlkIi8+PHBhdGggZD0iTTM5MiAxMjggSDMzNiBWMTYwIEgzNjAgVjM1MiBIMzM2IFYzODQgSDM5MiBaIiBmaWxsPSIjZDlmOTlkIi8+PHJlY3QgeD0iMTkyIiB5PSIxODQiIHdpZHRoPSIxMjgiIGhlaWdodD0iMjgiIHJ4PSIxNCIgZmlsbD0iI2Y4ZmFmYyIvPjxyZWN0IHg9IjE5MiIgeT0iMjQyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNmOGZhZmMiLz48cmVjdCB4PSIxOTIiIHk9IjMwMCIgd2lkdGg9IjcyIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNiZWYyNjQiLz48L2c+PC9zdmc+">
 <style>
 :root { --bg:#fafaf7; --fg:#1a1a1a; --muted:#7a7569; --rule:#e4e2dc;
   --accent:#b8541a; --code-bg:#f0ede4; --link:var(--accent); }
