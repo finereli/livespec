@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""livespec — CLI for the livespec service.
+
+Usage:
+  livespec upload <file.md>          # create new doc, print URL
+  livespec update <id> <file.md>     # update existing doc (uses stored token)
+  livespec comments <id>             # fetch comments as markdown
+  livespec list                      # list local doc ids you own
+  livespec url <id>                  # print URL for a doc
+
+Edit tokens are stored in ~/.livespec/tokens.json.
+"""
+import json, os, sys, pathlib, urllib.request, urllib.error
+
+BASE = os.environ.get("LIVESPEC_URL", "https://livespec.finereli.com")
+STORE = pathlib.Path.home() / ".livespec" / "tokens.json"
+
+def load_store():
+    if not STORE.exists(): return {}
+    return json.loads(STORE.read_text())
+
+def save_store(d):
+    STORE.parent.mkdir(parents=True, exist_ok=True)
+    STORE.write_text(json.dumps(d, indent=2))
+
+def req(method, path, data=None, headers=None, raw=False):
+    url = BASE + path
+    body = data if isinstance(data, (bytes, type(None))) else data.encode()
+    h = {"user-agent": "livespec-cli/0.1"}
+    h.update(headers or {})
+    r = urllib.request.Request(url, data=body, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(r) as resp:
+            content = resp.read()
+            return content if raw else json.loads(content)
+    except urllib.error.HTTPError as e:
+        sys.stderr.write(f"HTTP {e.code}: {e.read().decode()}\n")
+        sys.exit(1)
+
+def cmd_upload(path):
+    md = pathlib.Path(path).read_bytes()
+    res = req("POST", "/api/docs", data=md, headers={"content-type": "text/markdown"})
+    store = load_store()
+    store[res["id"]] = {"editToken": res["editToken"], "source": str(pathlib.Path(path).resolve())}
+    save_store(store)
+    print(res["url"])
+
+def cmd_update(doc_id, path):
+    store = load_store()
+    if doc_id not in store:
+        sys.stderr.write(f"No edit token stored for {doc_id}\n"); sys.exit(1)
+    md = pathlib.Path(path).read_bytes()
+    res = req("PUT", f"/api/docs/{doc_id}", data=md,
+              headers={"x-edit-token": store[doc_id]["editToken"],
+                       "content-type": "text/markdown"})
+    store[doc_id]["source"] = str(pathlib.Path(path).resolve())
+    save_store(store)
+    print(f"{BASE}/{doc_id}")
+
+def cmd_comments(doc_id):
+    arr = req("GET", f"/api/docs/{doc_id}/comments")
+    arr.sort(key=lambda c: (c.get("order", 0), c.get("created", 0)))
+    if not arr:
+        print("(no comments)"); return
+    doc = req("GET", f"/api/docs/{doc_id}")
+    print(f"# Comments on: {doc['title']}\n")
+    for c in arr:
+        anchor = c["anchor"].replace("\n", "\n> ")
+        print(f"> {anchor}\n\n{c['body']}\n\n_— {c['author']}_\n\n---\n")
+
+def cmd_list():
+    for did, meta in load_store().items():
+        print(f"{did}\t{BASE}/{did}\t{meta.get('source','')}")
+
+def cmd_url(doc_id):
+    print(f"{BASE}/{doc_id}")
+
+def main():
+    if len(sys.argv) < 2: print(__doc__); sys.exit(1)
+    cmd, args = sys.argv[1], sys.argv[2:]
+    fns = {"upload": cmd_upload, "update": cmd_update, "comments": cmd_comments,
+           "list": cmd_list, "url": cmd_url}
+    if cmd not in fns: print(__doc__); sys.exit(1)
+    fns[cmd](*args)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+name = "livespec"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+account_id = "7485eb8ab648601f411b650cd794bce3"
+
+# KV namespace for documents and comments.
+# Created with: wrangler kv namespace create livespec
+[[kv_namespaces]]
+binding = "LIVESPEC"
+id = "e8307f20f75843c7a78a68de38375e97"
+
+[[routes]]
+pattern = "livespec.finereli.com"
+custom_domain = true
