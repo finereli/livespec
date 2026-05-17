@@ -985,39 +985,36 @@ __DOC_BODY__
   }
 
   document.getElementById("copy-all").addEventListener("click", async () => {
-    const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    const cmts = sorted.filter((c) => (c.type || "comment") === "comment");
-    const approvedBlocks = new Set(sorted.filter((c) => c.type === "approve").map((c) => c.blockId));
-    if (!cmts.length && !approvedBlocks.size) { showToast("Nothing to copy"); return; }
-    const out = ["# Review of: " + document.title.replace(/ — livespec$/, ""), ""];
-    // Group comments by block, with approval marker.
+    // Approvals are for the human reviewer's tracking. The agent only needs
+    // the comments — the things they actually have to act on.
+    const cmts = COMMENTS
+      .filter((c) => (c.type || "comment") === "comment")
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    if (!cmts.length) { showToast("No comments to copy"); return; }
+    const out = ["# Comments on: " + document.title.replace(/ — livespec$/, ""), ""];
     const byBlock = {};
-    for (const c of cmts) (byBlock[c.blockId] = byBlock[c.blockId] || { anchor: c.anchor, order: c.order, items: [] }).items.push(c.body);
-    // Add approved-only blocks (no comments) so they appear too.
-    for (const c of sorted) {
-      if (c.type === "approve" && !byBlock[c.blockId]) {
-        byBlock[c.blockId] = { anchor: c.anchor, order: c.order, items: [] };
-      }
+    for (const c of cmts) {
+      const g = byBlock[c.blockId] = byBlock[c.blockId] || { anchor: c.anchor, order: c.order, items: [] };
+      g.items.push(c.body);
     }
     const groups = Object.entries(byBlock).sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
-    for (const [blockId, g] of groups) {
+    for (const [, g] of groups) {
       out.push("> " + g.anchor.split("\\n").join("\\n> "));
       out.push("");
-      if (approvedBlocks.has(blockId)) out.push("✓ approved");
       for (const body of g.items) out.push(body);
       out.push("");
       out.push("---");
       out.push("");
     }
+    const text = out.join("\\n");
     try {
-      await navigator.clipboard.writeText(out.join("\\n"));
-      showToast("Copied " + groups.length + " block(s)");
+      await navigator.clipboard.writeText(text);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = out.join("\\n"); document.body.appendChild(ta);
+      ta.value = text; document.body.appendChild(ta);
       ta.select(); document.execCommand("copy"); ta.remove();
-      showToast("Copied " + groups.length + " block(s)");
     }
+    showToast("Copied " + groups.length + " block(s)");
   });
 
   refresh();
