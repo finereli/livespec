@@ -1,31 +1,45 @@
 # livespec
 
-Upload markdown, get a URL, collect per-block comments. Cloudflare Worker + KV.
+A tiny service for reviewing markdown documents — specs, plans, design notes — outside the chat window. POST a markdown file, get a URL. The reader hovers any paragraph to leave a comment or taps ✓ to approve. **Copy all** dumps every comment back into the conversation, quoted to the block it was attached to.
 
-Live at <https://livespec.finereli.com>. Full design notes in [SPEC.md](SPEC.md).
+Built for the agent ↔ human spec-review loop: the agent writes a spec, the human reviews it in a browser at their own pace, the agent reads back the structured feedback and rewrites. No accounts, no setup.
 
-## Use
+## Free hosted service
 
-```bash
-./livespec upload SPEC.md           # → URL, stores edit token in ~/.livespec/tokens.json
-./livespec update <id> SPEC.md      # push a new version
-./livespec comments <id>            # print comments as quoted markdown
-```
-
-Or with `curl`:
+A live instance runs at **<https://livespec.finereli.com>** — free to use for personal projects. The whole flow is just `curl`:
 
 ```bash
+# Upload a doc — returns { id, editToken, url }
 curl -X POST https://livespec.finereli.com --data @SPEC.md
+
+# Replace it (same URL, comments are dropped — see spec)
 curl -X PUT  https://livespec.finereli.com/<id> \
-  -H "x-edit-token: <token>" --data @SPEC.md
+     -H "x-edit-token: <token>" \
+     --data @SPEC.md
+
+# Read the review back
 curl https://livespec.finereli.com/api/docs/<id>/comments
 ```
 
-## Develop
+A tiny Python CLI is included if you want it to remember edit tokens for you:
 
 ```bash
-wrangler dev      # local
-wrangler deploy   # ship
+./livespec upload SPEC.md           # → URL, stores token in ~/.livespec/tokens.json
+./livespec update <id> SPEC.md      # push a new version
+./livespec comments <id>            # print the review as quoted markdown
 ```
 
-Worker is a single file: [`src/worker.js`](src/worker.js). No build step.
+## Self-host
+
+Single Cloudflare Worker, single KV namespace, no build step.
+
+```bash
+wrangler kv namespace create livespec   # one-time
+wrangler deploy
+```
+
+Worker source: [`src/worker.js`](src/worker.js). Full design notes: [SPEC.md](SPEC.md).
+
+## License
+
+MIT.
