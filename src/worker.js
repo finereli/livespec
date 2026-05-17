@@ -365,6 +365,8 @@ const TEMPLATE = `<!doctype html>
   .approve:hover { color: var(--approve); border-color: var(--approve); }
 
   .block-comments { margin: 4px 0 12px; }
+  /* Align comments with the text of a list item, not the bullet. */
+  .block-wrap.is-list > .block-comments { padding-left: 1.6em; }
   .inline-comment {
     font-size: 13px; font-style: italic; color: var(--muted);
     border-left: 2px solid var(--accent);
@@ -417,7 +419,7 @@ const TEMPLATE = `<!doctype html>
 <body>
 <div class="topbar">
   <a class="brand" href="/">livespec</a>
-  <span class="count"><span id="approve-count">0</span> approved · <span id="count">0</span> comment(s)</span>
+  <span class="count"><span id="approve-count">0</span> approved · <span id="count">0</span> <span id="count-label">comments</span></span>
   <button id="copy-all" class="primary">Copy all</button>
 </div>
 <main id="content"></main>
@@ -464,11 +466,11 @@ const TEMPLATE = `<!doctype html>
   const wraps = [];
   let order = 0;
 
-  function buildBlock(contentEl, isTable) {
+  function buildBlock(contentEl, isTable, isList) {
     const idx = order++;
     const id = "b-" + idx + "-" + hash(contentEl.textContent.trim());
     const wrap = document.createElement("div");
-    wrap.className = "block-wrap";
+    wrap.className = "block-wrap" + (isList ? " is-list" : "");
     wrap.dataset.blockId = id;
     wrap.dataset.order = idx;
 
@@ -521,10 +523,10 @@ const TEMPLATE = `<!doctype html>
         const listClone = document.createElement(el.tagName);
         if (el.tagName === "OL") listClone.setAttribute("start", String(i + 1));
         listClone.appendChild(li);
-        buildBlock(listClone, false);
+        buildBlock(listClone, false, true);
       });
     } else {
-      buildBlock(el, el.tagName === "TABLE");
+      buildBlock(el, el.tagName === "TABLE", false);
     }
   });
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
@@ -678,6 +680,7 @@ const TEMPLATE = `<!doctype html>
   function renderAll() {
     const onlyComments = COMMENTS.filter((c) => (c.type || "comment") === "comment");
     countEl.textContent = onlyComments.length;
+    document.getElementById("count-label").textContent = onlyComments.length === 1 ? "comment" : "comments";
     const approvedBlockIds = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
     document.getElementById("approve-count").textContent = approvedBlockIds.size;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
