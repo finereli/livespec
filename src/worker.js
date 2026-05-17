@@ -202,7 +202,7 @@ function renderHtml(id, doc) {
   const md = escapeScript(doc.markdown);
   return TEMPLATE
     .replace(/__TITLE__/g, title)
-    .replace("__DOC_ID__", id)
+    .replace(/__DOC_ID__/g, id)
     .replace("__MARKDOWN__", md);
 }
 
