@@ -308,19 +308,14 @@ const TEMPLATE = `<!doctype html>
   blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .3em 1em; color: var(--muted); }
   ul, ol { padding-left: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
-  /* Side-scroll tables that exceed the viewport, with shadow affordances at the edges. */
-  .table-scroll {
-    overflow-x: auto;
-    background:
-      linear-gradient(to right, var(--bg) 30%, transparent) left center,
-      linear-gradient(to left, var(--bg) 30%, transparent) right center,
-      radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.18), transparent) left center,
-      radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.18), transparent) right center;
-    background-repeat: no-repeat;
-    background-size: 28px 100%, 28px 100%, 12px 100%, 12px 100%;
-    background-attachment: local, local, scroll, scroll;
+  .table-scroll { overflow-x: auto; }
+  /* Tables: keep the action pills below the table so they never collide with cells. */
+  .block-text.is-table .block-actions {
+    position: static; justify-content: flex-end;
+    margin-top: 8px; padding-bottom: 2px;
+    pointer-events: auto;
   }
-  .table-scroll table { width: 100%; }
+  .block-text.is-table { padding-bottom: 4px; }
 
   .block-wrap { margin: 0; }
   .block-text {
@@ -464,16 +459,18 @@ const TEMPLATE = `<!doctype html>
   const blockSelectors = "h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,table";
   const sourceBlocks = [...rendered.querySelectorAll(":scope > " + blockSelectors)];
   const wraps = [];
-  sourceBlocks.forEach((el, idx) => {
-    const id = "b-" + idx + "-" + hash(el.textContent.trim());
+  let order = 0;
+
+  function buildBlock(contentEl, isTable) {
+    const idx = order++;
+    const id = "b-" + idx + "-" + hash(contentEl.textContent.trim());
     const wrap = document.createElement("div");
     wrap.className = "block-wrap";
     wrap.dataset.blockId = id;
     wrap.dataset.order = idx;
 
-    // .block-text holds the original block + the action pills, and is the only thing that highlights on hover.
     const blockText = document.createElement("div");
-    blockText.className = "block-text";
+    blockText.className = "block-text" + (isTable ? " is-table" : "");
 
     const actions = document.createElement("div");
     actions.className = "block-actions";
@@ -490,17 +487,16 @@ const TEMPLATE = `<!doctype html>
     approveBtn.title = "Approve this block";
     approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
 
-    // Order matters: + comment on the left, ✓ on the right.
     actions.appendChild(addBtn);
     actions.appendChild(approveBtn);
 
-    if (el.tagName === "TABLE") {
+    if (isTable) {
       const tw = document.createElement("div");
       tw.className = "table-scroll";
-      tw.appendChild(el);
+      tw.appendChild(contentEl);
       blockText.appendChild(tw);
     } else {
-      blockText.appendChild(el);
+      blockText.appendChild(contentEl);
     }
     blockText.appendChild(actions);
 
@@ -511,6 +507,22 @@ const TEMPLATE = `<!doctype html>
     wrap.appendChild(commentsEl);
     content.appendChild(wrap);
     wraps.push(wrap);
+  }
+
+  sourceBlocks.forEach((el) => {
+    // Split lists so each <li> is its own commentable block. Re-wrap each item
+    // in a fresh <ul>/<ol> to preserve bullets / numbering.
+    if (el.tagName === "UL" || el.tagName === "OL") {
+      const items = [...el.children].filter((c) => c.tagName === "LI");
+      items.forEach((li, i) => {
+        const listClone = document.createElement(el.tagName);
+        if (el.tagName === "OL") listClone.setAttribute("start", String(i + 1));
+        listClone.appendChild(li);
+        buildBlock(listClone, false);
+      });
+    } else {
+      buildBlock(el, el.tagName === "TABLE");
+    }
   });
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
 
