@@ -284,6 +284,24 @@ export default {
 
     if (req.method === "OPTIONS") return json({}, 204);
 
+    // Static assets — content-hashed URL, served with a long cache.
+    if (pathname === "/assets/app.css" && req.method === "GET") {
+      return new Response(DOC_CSS, {
+        headers: {
+          "content-type": "text/css; charset=utf-8",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+    if (pathname === "/assets/app.js" && req.method === "GET") {
+      return new Response(DOC_JS, {
+        headers: {
+          "content-type": "application/javascript; charset=utf-8",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+
     // Root: GET → landing, POST → create doc.
     if (pathname === "/" || pathname === "") {
       if (req.method === "POST") return createDoc(req, url, env);
@@ -457,25 +475,29 @@ function renderHtml(id, doc, viewingVersion, markdown) {
   const title = escapeHtml(doc.title || "Untitled");
   const body = renderDocBody(markdown);
   const isReadonly = viewingVersion !== doc.currentVersion;
-  const versionsJson = JSON.stringify(doc.versions || []);
+  const config = {
+    docId: id,
+    viewingVersion,
+    currentVersion: doc.currentVersion,
+    versions: doc.versions || [],
+    readonly: isReadonly,
+  };
   return TEMPLATE
     .replace(/__TITLE__/g, title)
     .replace(/__DOC_ID__/g, id)
     .replace(/__VIEWING_VERSION__/g, String(viewingVersion))
-    .replace(/__CURRENT_VERSION__/g, String(doc.currentVersion))
-    .replace("__VERSIONS_JSON__", versionsJson)
-    .replace(/__READONLY__/g, isReadonly ? "true" : "false")
+    .replace(/__ASSET_VER__/g, ASSET_VER)
+    .replace("__CONFIG_JSON__", JSON.stringify(config))
     .replace("__DOC_BODY__", body);
 }
 
-const TEMPLATE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>__TITLE__ — livespec</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iaWNvbiI+PHJlY3QgeD0iMzIiIHk9IjMyIiB3aWR0aD0iNDQ4IiBoZWlnaHQ9IjQ0OCIgcng9IjcyIiBmaWxsPSIjMWUyOTNiIi8+PHBhdGggZD0iTTEyMCAxMjggSDE3NiBWMTYwIEgxNTIgVjM1MiBIMTc2IFYzODQgSDEyMCBaIiBmaWxsPSIjZDlmOTlkIi8+PHBhdGggZD0iTTM5MiAxMjggSDMzNiBWMTYwIEgzNjAgVjM1MiBIMzM2IFYzODQgSDM5MiBaIiBmaWxsPSIjZDlmOTlkIi8+PHJlY3QgeD0iMTkyIiB5PSIxODQiIHdpZHRoPSIxMjgiIGhlaWdodD0iMjgiIHJ4PSIxNCIgZmlsbD0iI2Y4ZmFmYyIvPjxyZWN0IHg9IjE5MiIgeT0iMjQyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNmOGZhZmMiLz48cmVjdCB4PSIxOTIiIHk9IjMwMCIgd2lkdGg9IjcyIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNiZWYyNjQiLz48L2c+PC9zdmc+">
-<style>
+function djb2Hex(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+const DOC_CSS = `
   :root {
     --bg: #fafaf7; --fg: #1a1a1a; --muted: #7a7569;
     --rule: #e4e2dc; --accent: #b8541a; --accent-2: #8a3e13;
@@ -667,7 +689,16 @@ const TEMPLATE = `<!doctype html>
     .block-actions { right: 2px; bottom: 2px; }
     .pill { padding: 3px 10px; font-size: 12px; }
   }
-</style>
+`;
+
+const TEMPLATE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>__TITLE__ — livespec</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iaWNvbiI+PHJlY3QgeD0iMzIiIHk9IjMyIiB3aWR0aD0iNDQ4IiBoZWlnaHQ9IjQ0OCIgcng9IjcyIiBmaWxsPSIjMWUyOTNiIi8+PHBhdGggZD0iTTEyMCAxMjggSDE3NiBWMTYwIEgxNTIgVjM1MiBIMTc2IFYzODQgSDEyMCBaIiBmaWxsPSIjZDlmOTlkIi8+PHBhdGggZD0iTTM5MiAxMjggSDMzNiBWMTYwIEgzNjAgVjM1MiBIMzM2IFYzODQgSDM5MiBaIiBmaWxsPSIjZDlmOTlkIi8+PHJlY3QgeD0iMTkyIiB5PSIxODQiIHdpZHRoPSIxMjgiIGhlaWdodD0iMjgiIHJ4PSIxNCIgZmlsbD0iI2Y4ZmFmYyIvPjxyZWN0IHg9IjE5MiIgeT0iMjQyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNmOGZhZmMiLz48cmVjdCB4PSIxOTIiIHk9IjMwMCIgd2lkdGg9IjcyIiBoZWlnaHQ9IjI4IiByeD0iMTQiIGZpbGw9IiNiZWYyNjQiLz48L2c+PC9zdmc+">
+<link rel="stylesheet" href="/assets/app.css?v=__ASSET_VER__">
 </head>
 <body>
 <div class="topbar">
@@ -688,13 +719,18 @@ __DOC_BODY__
 </main>
 <footer class="doc-footer">__DOC_ID__ · v__VIEWING_VERSION__</footer>
 <div class="toast" id="toast"></div>
-<script>
-(function () {
-  const DOC_ID = "__DOC_ID__";
-  const VIEWING_VERSION = __VIEWING_VERSION__;
-  const CURRENT_VERSION = __CURRENT_VERSION__;
-  const VERSIONS = __VERSIONS_JSON__;
-  const READONLY = __READONLY__;
+<script>window.LIVESPEC = __CONFIG_JSON__;</script>
+<script src="/assets/app.js?v=__ASSET_VER__" defer></script>
+</body>
+</html>`;
+
+const DOC_JS = `(function () {
+  const CFG = window.LIVESPEC;
+  const DOC_ID = CFG.docId;
+  const VIEWING_VERSION = CFG.viewingVersion;
+  const CURRENT_VERSION = CFG.currentVersion;
+  const VERSIONS = CFG.versions;
+  const READONLY = CFG.readonly;
   // Comments are always fetched for the version being viewed; mutations always
   // hit current. Since the page is locked to one version, just compute the URL.
   const API = "/api/docs/" + DOC_ID + "/v" + VIEWING_VERSION + "/comments";
@@ -1019,9 +1055,9 @@ __DOC_BODY__
 
   refresh();
 })();
-<\/script>
-</body>
-</html>`;
+`;
+
+const ASSET_VER = djb2Hex(DOC_CSS) + djb2Hex(DOC_JS);
 
 const LANDING_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
