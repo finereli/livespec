@@ -913,6 +913,9 @@ const DOC_JS = `(function () {
       if (e.key === "Enter" && !e.shiftKey && !TOUCH) {
         e.preventDefault();
         saveBtn.click();
+      } else if (e.key === "Escape" && !TOUCH) {
+        e.preventDefault();
+        editor.querySelector(".cancel").click();
       }
     });
     // Run autosize after the textarea is in the DOM (scrollHeight is 0 otherwise).
