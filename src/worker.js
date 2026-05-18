@@ -129,6 +129,7 @@ function renderDocBody(md) {
           `<div class="block-actions">` +
             `<button class="pill add" type="button">+ comment</button>` +
             `<button class="pill approve" type="button" title="Approve this block"></button>` +
+            `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
           `</div>` +
         `</div>` +
         `<div class="block-comments"></div>` +
@@ -240,14 +241,15 @@ async function updateDoc(req, env, id) {
   const next = doc.currentVersion + 1;
   await env.LIVESPEC.put(`doc:${id}:v${next}`, JSON.stringify({ markdown: md, created: now }));
 
-  // Carry forward approvals on blocks that still exist (same blockId) in the
-  // new version. Comments do NOT carry forward — they belong to the round
-  // they were written for.
+  // Carry forward approvals + removal markers on blocks that still exist
+  // (same blockId) in the new version. Comments do NOT carry forward — they
+  // belong to the round they were written for. A removal naturally drops once
+  // the agent actually deletes the block (blockId no longer present).
   const prev = await loadVersionComments(env, id, doc, doc.currentVersion);
-  const prevApprovals = prev.filter((c) => c.type === "approve");
-  if (prevApprovals.length) {
+  const carryable = prev.filter((c) => c.type === "approve" || c.type === "remove");
+  if (carryable.length) {
     const newIds = new Set(renderBlocks(md).map((b) => b.blockId).filter(Boolean));
-    const carried = prevApprovals
+    const carried = carryable
       .filter((a) => newIds.has(a.blockId))
       .map((a) => ({ ...a, cid: randId(10), created: now }));
     if (carried.length) {
@@ -369,19 +371,21 @@ export default {
         const body = await req.json().catch(() => null);
         if (!body || !body.blockId) return bad("blockId required");
         const author = body.author || "anon";
-        const type = body.type === "approve" ? "approve" : "comment";
+        const type = body.type === "approve" ? "approve"
+          : body.type === "remove" ? "remove"
+          : "comment";
         const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
-        if (type === "approve") {
+        if (type === "approve" || type === "remove") {
           const idx = comments.findIndex(
-            (c) => c.type === "approve" && c.blockId === body.blockId && c.author === author,
+            (c) => c.type === type && c.blockId === body.blockId && c.author === author,
           );
           if (idx >= 0) {
             comments.splice(idx, 1);
             await saveCurrentComments(env, id, doc, comments);
-            return json({ ok: true, approved: false });
+            return json({ ok: true, set: false });
           }
           const entry = {
-            cid: randId(10), type: "approve",
+            cid: randId(10), type,
             blockId: body.blockId,
             anchor: (body.anchor || "").slice(0, 500),
             author,
@@ -390,7 +394,7 @@ export default {
           };
           comments.push(entry);
           await saveCurrentComments(env, id, doc, comments);
-          return json({ ok: true, approved: true, cid: entry.cid }, 201);
+          return json({ ok: true, set: true, cid: entry.cid }, 201);
         }
         if (!body.body) return bad("body required for comment");
         const entry = {
@@ -639,6 +643,21 @@ const DOC_CSS = `
   .approve.mine:hover { background: var(--approve); color: white; border-color: var(--approve); }
   .approve:hover { color: var(--approve); border-color: var(--approve); }
 
+  .remove { opacity: 0; font-size: 10px; padding: 2px 7px; }
+  .remove.has-any { opacity: .85; pointer-events: auto; }
+  @media (hover: hover) { .block-text:hover .remove { opacity: 1; pointer-events: auto; } }
+  .block-wrap.selected .remove { opacity: 1; pointer-events: auto; }
+  .remove.mine { background: #c53030; color: white; border-color: #c53030; opacity: 1; pointer-events: auto; }
+  .remove.mine:hover { background: #c53030; color: white; border-color: #c53030; }
+  .remove:hover { color: #c53030; border-color: #c53030; }
+  .block-wrap.marked-remove > .block-text {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, #c53030 70%, transparent);
+    text-decoration-thickness: 2px;
+    opacity: .55;
+  }
+  .block-wrap.marked-remove > .block-text .block-actions { text-decoration: none; opacity: 1; }
+
   .block-comments { margin: 4px 0 12px; }
   /* Align comments with the text of a list item, not the bullet. */
   .block-wrap.is-list > .block-comments { padding-left: 1.6em; }
@@ -811,8 +830,10 @@ const DOC_JS = `(function () {
   for (const wrap of wraps) {
     const addBtn = wrap.querySelector(".pill.add");
     const approveBtn = wrap.querySelector(".pill.approve");
+    const removeBtn = wrap.querySelector(".pill.remove");
     if (addBtn) addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
-    if (approveBtn) approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleApprove(wrap); });
+    if (approveBtn) approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMark(wrap, "approve"); });
+    if (removeBtn) removeBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMark(wrap, "remove"); });
   }
 
   // Touch-only: tap a block to reveal the action pills. Desktop hover handles this in CSS.
@@ -851,18 +872,18 @@ const DOC_JS = `(function () {
     }
   }
 
-  function toggleApprove(wrap) {
+  function toggleMark(wrap, type) {
     // Optimistic: flip local state and re-render immediately; fire-and-forget the server call.
     const blockId = wrap.dataset.blockId;
     const idx = COMMENTS.findIndex(
-      (c) => c.type === "approve" && c.blockId === blockId && c.author === AUTHOR,
+      (c) => c.type === type && c.blockId === blockId && c.author === AUTHOR,
     );
     if (idx >= 0) {
       COMMENTS.splice(idx, 1);
     } else {
       COMMENTS.push({
         cid: "tmp-" + Math.random().toString(36).slice(2, 8),
-        type: "approve", blockId, author: AUTHOR,
+        type, blockId, author: AUTHOR,
         anchor: snippet(wrap),
         order: Number(wrap.dataset.order),
         created: Date.now(),
@@ -873,13 +894,12 @@ const DOC_JS = `(function () {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        type: "approve",
-        blockId,
+        type, blockId,
         anchor: snippet(wrap),
         author: AUTHOR,
         order: Number(wrap.dataset.order),
       }),
-    }).then(() => refresh()).catch(() => showToast("Approve failed", true));
+    }).then(() => refresh()).catch(() => showToast(type === "remove" ? "Mark failed" : "Approve failed", true));
   }
 
   function openEditor(wrap, editingCid) {
@@ -977,13 +997,12 @@ const DOC_JS = `(function () {
     const approvedBlockIds = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
     document.getElementById("approve-count").textContent = approvedBlockIds.size;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
-    const cmtByBlock = {}, apprByBlock = {};
+    const cmtByBlock = {}, apprByBlock = {}, rmByBlock = {};
     for (const c of sorted) {
-      if ((c.type || "comment") === "approve") {
-        (apprByBlock[c.blockId] = apprByBlock[c.blockId] || []).push(c);
-      } else {
-        (cmtByBlock[c.blockId] = cmtByBlock[c.blockId] || []).push(c);
-      }
+      const t = c.type || "comment";
+      if (t === "approve") (apprByBlock[c.blockId] = apprByBlock[c.blockId] || []).push(c);
+      else if (t === "remove") (rmByBlock[c.blockId] = rmByBlock[c.blockId] || []).push(c);
+      else (cmtByBlock[c.blockId] = cmtByBlock[c.blockId] || []).push(c);
     }
     for (const wrap of wraps) {
       // Approvals
@@ -993,6 +1012,17 @@ const DOC_JS = `(function () {
       approveBtn.classList.toggle("has-any", apps.length > 0);
       approveBtn.classList.toggle("mine", mine);
       approveBtn.textContent = "✓" + (apps.length > 1 ? " " + apps.length : "");
+
+      // Removal marks
+      const rms = rmByBlock[wrap.dataset.blockId] || [];
+      const rmMine = rms.some((a) => a.author === AUTHOR);
+      const removeBtn = wrap.querySelector(".remove");
+      if (removeBtn) {
+        removeBtn.classList.toggle("has-any", rms.length > 0);
+        removeBtn.classList.toggle("mine", rmMine);
+        removeBtn.textContent = "🗑" + (rms.length > 1 ? " " + rms.length : "");
+      }
+      wrap.classList.toggle("marked-remove", rms.length > 0);
 
       // Comments
       const list = cmtByBlock[wrap.dataset.blockId] || [];
@@ -1025,22 +1055,26 @@ const DOC_JS = `(function () {
 
   document.getElementById("copy-all").addEventListener("click", async () => {
     // Approvals are for the human reviewer's tracking. The agent only needs
-    // the comments — the things they actually have to act on.
-    const cmts = COMMENTS
-      .filter((c) => (c.type || "comment") === "comment")
+    // the things they have to act on: comments + removal requests.
+    const actionable = COMMENTS
+      .filter((c) => c.type !== "approve")
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    if (!cmts.length) { showToast("No comments to copy"); return; }
-    const out = ["# Comments on: " + document.title.replace(/ — livespec$/, ""), ""];
+    if (!actionable.length) { showToast("Nothing to copy"); return; }
     const byBlock = {};
-    for (const c of cmts) {
-      const g = byBlock[c.blockId] = byBlock[c.blockId] || { anchor: c.anchor, order: c.order, items: [] };
-      g.items.push(c.body);
+    for (const c of actionable) {
+      const g = byBlock[c.blockId] = byBlock[c.blockId] || {
+        anchor: c.anchor, order: c.order, comments: [], remove: false,
+      };
+      if (c.type === "remove") g.remove = true;
+      else g.comments.push(c.body);
     }
     const groups = Object.entries(byBlock).sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
+    const out = ["# Comments on: " + document.title.replace(/ — livespec$/, ""), ""];
     for (const [, g] of groups) {
-      out.push("> " + g.anchor.split("\\n").join("\\n> "));
+      out.push("> " + (g.anchor || "").split("\\n").join("\\n> "));
       out.push("");
-      for (const body of g.items) out.push(body);
+      if (g.remove) out.push("**Remove this block.**");
+      for (const body of g.comments) out.push(body);
       out.push("");
       out.push("---");
       out.push("");
