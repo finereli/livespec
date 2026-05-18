@@ -128,8 +128,10 @@ function renderDocBody(md) {
           inner +
           `<div class="block-actions">` +
             `<button class="pill add" type="button">+ comment</button>` +
-            `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
-            `<button class="pill approve" type="button" title="Approve this block"></button>` +
+            `<span class="mark-slot">` +
+              `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
+              `<button class="pill approve" type="button" title="Approve this block"></button>` +
+            `</span>` +
           `</div>` +
         `</div>` +
         `<div class="block-comments"></div>` +
@@ -622,6 +624,10 @@ const DOC_CSS = `
     display: flex; gap: 4px; align-items: center;
     pointer-events: none;
   }
+  /* Trash + approve share a single right-anchored slot so they form a
+     consistent column down the page no matter which one is set on a block. */
+  .mark-slot { position: relative; display: inline-block; width: 30px; height: 20px; }
+  .mark-slot > .pill { position: absolute; right: 0; bottom: 0; }
   .pill {
     font-size: 11px; padding: 2px 8px; border-radius: 10px;
     background: var(--bg); color: var(--muted);
