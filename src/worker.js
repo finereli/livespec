@@ -128,10 +128,8 @@ function renderDocBody(md) {
           inner +
           `<div class="block-actions">` +
             `<button class="pill add" type="button">+ comment</button>` +
-            `<span class="mark-slot">` +
-              `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
-              `<button class="pill approve" type="button" title="Approve this block"></button>` +
-            `</span>` +
+            `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
+            `<button class="pill approve" type="button" title="Approve this block"></button>` +
           `</div>` +
         `</div>` +
         `<div class="block-comments"></div>` +
@@ -619,15 +617,30 @@ const DOC_CSS = `
   .block-wrap.selected .block-text { background: var(--accent-bg); }
 
   /* Actions sit at the bottom-right of the block, overlapping the last line if there's room. */
+  /* Two modes:
+       Idle — only the currently-set mark (trash or ✓) is visible, pinned to
+              the right edge so marks form a clean column down the page.
+       Hover — full mini-toolbar (+ comment | 🗑 | ✓) in flex flow, every
+               button independently clickable. Indication ≠ action. */
   .block-actions {
     position: absolute; right: 4px; bottom: 2px;
     display: flex; gap: 4px; align-items: center;
     pointer-events: none;
   }
-  /* Trash + approve share a single right-anchored slot so they form a
-     consistent column down the page no matter which one is set on a block. */
-  .mark-slot { position: relative; display: inline-block; width: 30px; height: 20px; }
-  .mark-slot > .pill { position: absolute; right: 0; bottom: 0; }
+  .block-actions .remove,
+  .block-actions .approve {
+    position: absolute; right: 0; bottom: 0;
+  }
+  @media (hover: hover) {
+    .block-text:hover .block-actions .remove,
+    .block-text:hover .block-actions .approve {
+      position: static;
+    }
+  }
+  .block-wrap.selected .block-actions .remove,
+  .block-wrap.selected .block-actions .approve {
+    position: static;
+  }
   .pill {
     font-size: 11px; padding: 2px 8px; border-radius: 10px;
     background: var(--bg); color: var(--muted);
