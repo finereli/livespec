@@ -128,8 +128,8 @@ function renderDocBody(md) {
           inner +
           `<div class="block-actions">` +
             `<button class="pill add" type="button">+ comment</button>` +
-            `<button class="pill approve" type="button" title="Approve this block"></button>` +
             `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
+            `<button class="pill approve" type="button" title="Approve this block"></button>` +
           `</div>` +
         `</div>` +
         `<div class="block-comments"></div>` +
@@ -806,6 +806,46 @@ const DOC_JS = `(function () {
   const countEl = document.getElementById("count");
   const toast = document.getElementById("toast");
 
+  function topVisibleBlockId() {
+    for (const w of wraps) {
+      const r = w.getBoundingClientRect();
+      if (r.bottom > 80) return w.dataset.blockId;
+    }
+    return null;
+  }
+  // If a newer version has been pushed since this page loaded, jump to it,
+  // anchored on the block the user is currently looking at so they don't
+  // lose their place. Old-version views (readonly) are intentional; leave them.
+  let _checking = false;
+  async function checkForNewVersion() {
+    if (READONLY || _checking) return false;
+    _checking = true;
+    try {
+      const res = await fetch("/api/docs/" + DOC_ID, { cache: "no-store" });
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (d.currentVersion > CURRENT_VERSION) {
+        const top = topVisibleBlockId();
+        showToast("New version v" + d.currentVersion + " — reloading");
+        setTimeout(() => {
+          location.href = "/" + DOC_ID + (top ? "#" + top : "");
+        }, 600);
+        return true;
+      }
+    } catch {}
+    finally { _checking = false; }
+    return false;
+  }
+  // Re-check on focus (user returns to the tab) and after a failed mutation.
+  window.addEventListener("focus", checkForNewVersion);
+  // On load, if URL has a #blockId hash, scroll the block into view.
+  (function scrollToHash() {
+    const h = decodeURIComponent(location.hash.slice(1));
+    if (!h) return;
+    const el = content.querySelector('[data-block-id="' + h.replace(/"/g, '\\\\"') + '"]');
+    if (el) el.scrollIntoView({ block: "start" });
+  })();
+
   function showToast(msg, err) {
     toast.textContent = msg;
     toast.classList.toggle("err", !!err);
@@ -899,7 +939,14 @@ const DOC_JS = `(function () {
         author: AUTHOR,
         order: Number(wrap.dataset.order),
       }),
-    }).then(() => refresh()).catch(() => showToast(type === "remove" ? "Mark failed" : "Approve failed", true));
+    }).then(async (r) => {
+      if (!r.ok) {
+        const reloaded = await checkForNewVersion();
+        if (!reloaded) showToast(type === "remove" ? "Mark failed" : "Approve failed", true);
+        return;
+      }
+      refresh();
+    }).catch(() => showToast(type === "remove" ? "Mark failed" : "Approve failed", true));
   }
 
   function openEditor(wrap, editingCid) {
@@ -951,25 +998,29 @@ const DOC_JS = `(function () {
       if (!text) { status.textContent = "Empty"; return; }
       status.textContent = "Saving…";
       try {
-        if (editingCid) {
-          await fetch(API + "/" + editingCid, {
-            method: "PUT",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ body: text, author: AUTHOR }),
-          });
-        } else {
-          await fetch(API, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              type: "comment",
-              blockId: wrap.dataset.blockId,
-              anchor: snippet(wrap),
-              body: text,
-              author: AUTHOR,
-              order: Number(wrap.dataset.order),
-            }),
-          });
+        const res = editingCid
+          ? await fetch(API + "/" + editingCid, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ body: text, author: AUTHOR }),
+            })
+          : await fetch(API, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                type: "comment",
+                blockId: wrap.dataset.blockId,
+                anchor: snippet(wrap),
+                body: text,
+                author: AUTHOR,
+                order: Number(wrap.dataset.order),
+              }),
+            });
+        if (!res.ok) {
+          status.textContent = "";
+          const reloaded = await checkForNewVersion();
+          if (!reloaded) showToast("Save failed", true);
+          return;
         }
         editor.remove();
         await refresh();
