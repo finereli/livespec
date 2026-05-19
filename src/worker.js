@@ -370,18 +370,19 @@ export default {
       if (sub === "comments" && !cid && req.method === "POST") {
         const body = await req.json().catch(() => null);
         if (!body || !body.blockId) return bad("blockId required");
-        const author = body.author || "anon";
+        const author = "anon";
         const type = body.type === "approve" ? "approve"
           : body.type === "remove" ? "remove"
           : "comment";
         const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         if (type === "approve" || type === "remove") {
-          const idx = comments.findIndex(
-            (c) => c.type === type && c.blockId === body.blockId && c.author === author,
-          );
-          if (idx >= 0) {
-            comments.splice(idx, 1);
-            await saveCurrentComments(env, id, doc, comments);
+          // Toggle: any existing mark of this type on this block clears them
+          // all (sweeps up legacy per-author records); otherwise add a single
+          // anon mark.
+          const hadAny = comments.some((c) => c.type === type && c.blockId === body.blockId);
+          if (hadAny) {
+            const remaining = comments.filter((c) => !(c.type === type && c.blockId === body.blockId));
+            await saveCurrentComments(env, id, doc, remaining);
             return json({ ok: true, set: false });
           }
           const entry = {
@@ -414,29 +415,20 @@ export default {
       if (sub === "comments" && cid && req.method === "PUT") {
         const body = await req.json().catch(() => null);
         if (!body || !body.body) return bad("body required");
-        const author = body.author || req.headers.get("x-author");
-        const editToken = req.headers.get("x-edit-token");
         const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         const idx = comments.findIndex((c) => c.cid === cid);
         if (idx < 0) return notFound("comment not found");
         const c = comments[idx];
         if (c.type !== "comment") return bad("only comments can be edited");
-        if (c.author !== author && editToken !== doc.editToken) return forbidden("not your comment");
         c.body = String(body.body).slice(0, 5000);
         c.updated = Date.now();
         await saveCurrentComments(env, id, doc, comments);
         return json(c);
       }
       if (sub === "comments" && cid && req.method === "DELETE") {
-        const author = req.headers.get("x-author") || url.searchParams.get("author");
-        const editToken = req.headers.get("x-edit-token");
         const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         const idx = comments.findIndex((c) => c.cid === cid);
         if (idx < 0) return notFound("comment not found");
-        const c = comments[idx];
-        if (c.author !== author && editToken !== doc.editToken) {
-          return forbidden("not your comment");
-        }
         comments.splice(idx, 1);
         await saveCurrentComments(env, id, doc, comments);
         return json({ ok: true });
@@ -655,7 +647,6 @@ const DOC_CSS = `
   .add:hover { opacity: 1 !important; background: var(--accent); color: white; border-color: var(--accent); }
 
   .approve { opacity: 0; }
-  .approve.has-any { opacity: .85; pointer-events: auto; }
   @media (hover: hover) { .block-text:hover .approve { opacity: 1; pointer-events: auto; } }
   .block-wrap.selected .approve { opacity: 1; pointer-events: auto; }
   .approve.mine { background: var(--approve); color: white; border-color: var(--approve); opacity: 1; pointer-events: auto; }
@@ -663,7 +654,6 @@ const DOC_CSS = `
   .approve:hover { color: var(--approve); border-color: var(--approve); }
 
   .remove { opacity: 0; font-size: 10px; padding: 2px 7px; }
-  .remove.has-any { opacity: .85; pointer-events: auto; }
   @media (hover: hover) { .block-text:hover .remove { opacity: 1; pointer-events: auto; } }
   .block-wrap.selected .remove { opacity: 1; pointer-events: auto; }
   .remove.mine { background: #c53030; color: white; border-color: #c53030; opacity: 1; pointer-events: auto; }
@@ -815,12 +805,6 @@ const DOC_JS = `(function () {
     document.addEventListener("click", () => list.classList.remove("open"));
   })();
 
-  let AUTHOR = localStorage.getItem("livespec:author");
-  if (!AUTHOR) {
-    AUTHOR = "u-" + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem("livespec:author", AUTHOR);
-  }
-
   const content = document.getElementById("content");
   const countEl = document.getElementById("count");
   const toast = document.getElementById("toast");
@@ -933,16 +917,15 @@ const DOC_JS = `(function () {
 
   function toggleMark(wrap, type) {
     // Optimistic: flip local state and re-render immediately; fire-and-forget the server call.
+    // Toggle semantics: any existing mark of this type on this block clears it.
     const blockId = wrap.dataset.blockId;
-    const idx = COMMENTS.findIndex(
-      (c) => c.type === type && c.blockId === blockId && c.author === AUTHOR,
-    );
-    if (idx >= 0) {
-      COMMENTS.splice(idx, 1);
+    const had = COMMENTS.some((c) => c.type === type && c.blockId === blockId);
+    if (had) {
+      COMMENTS = COMMENTS.filter((c) => !(c.type === type && c.blockId === blockId));
     } else {
       COMMENTS.push({
         cid: "tmp-" + Math.random().toString(36).slice(2, 8),
-        type, blockId, author: AUTHOR,
+        type, blockId,
         anchor: snippet(wrap),
         order: Number(wrap.dataset.order),
         created: Date.now(),
@@ -955,7 +938,6 @@ const DOC_JS = `(function () {
       body: JSON.stringify({
         type, blockId,
         anchor: snippet(wrap),
-        author: AUTHOR,
         order: Number(wrap.dataset.order),
       }),
     }).then(async (r) => {
@@ -1021,7 +1003,7 @@ const DOC_JS = `(function () {
           ? await fetch(API + "/" + editingCid, {
               method: "PUT",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ body: text, author: AUTHOR }),
+              body: JSON.stringify({ body: text }),
             })
           : await fetch(API, {
               method: "POST",
@@ -1031,7 +1013,6 @@ const DOC_JS = `(function () {
                 blockId: wrap.dataset.blockId,
                 anchor: snippet(wrap),
                 body: text,
-                author: AUTHOR,
                 order: Number(wrap.dataset.order),
               }),
             });
@@ -1075,24 +1056,20 @@ const DOC_JS = `(function () {
       else (cmtByBlock[c.blockId] = cmtByBlock[c.blockId] || []).push(c);
     }
     for (const wrap of wraps) {
-      // Approvals
-      const apps = apprByBlock[wrap.dataset.blockId] || [];
-      const mine = apps.some((a) => a.author === AUTHOR);
+      // Approvals — single-author model, any record marks the block.
+      const approved = (apprByBlock[wrap.dataset.blockId] || []).length > 0;
       const approveBtn = wrap.querySelector(".approve");
-      approveBtn.classList.toggle("has-any", apps.length > 0);
-      approveBtn.classList.toggle("mine", mine);
-      approveBtn.textContent = "✓" + (apps.length > 1 ? " " + apps.length : "");
+      approveBtn.classList.toggle("mine", approved);
+      approveBtn.textContent = "✓";
 
       // Removal marks
-      const rms = rmByBlock[wrap.dataset.blockId] || [];
-      const rmMine = rms.some((a) => a.author === AUTHOR);
+      const removed = (rmByBlock[wrap.dataset.blockId] || []).length > 0;
       const removeBtn = wrap.querySelector(".remove");
       if (removeBtn) {
-        removeBtn.classList.toggle("has-any", rms.length > 0);
-        removeBtn.classList.toggle("mine", rmMine);
-        removeBtn.textContent = "🗑" + (rms.length > 1 ? " " + rms.length : "");
+        removeBtn.classList.toggle("mine", removed);
+        removeBtn.textContent = "🗑";
       }
-      wrap.classList.toggle("marked-remove", rms.length > 0);
+      wrap.classList.toggle("marked-remove", removed);
 
       // Comments
       const list = cmtByBlock[wrap.dataset.blockId] || [];
@@ -1100,21 +1077,21 @@ const DOC_JS = `(function () {
       container.innerHTML = "";
       for (const c of list) {
         const div = document.createElement("div");
-        const isMine = !READONLY && c.author === AUTHOR;
-        div.className = "inline-comment" + (isMine ? " mine" : "");
+        const editable = !READONLY;
+        div.className = "inline-comment" + (editable ? " mine" : "");
         div.dataset.cid = c.cid;
         div.innerHTML =
           '<span class="body"></span>' +
-          (isMine ? '<button class="del" type="button" title="Delete">×</button>' : "");
+          (editable ? '<button class="del" type="button" title="Delete">×</button>' : "");
         div.querySelector(".body").textContent = c.body;
-        if (isMine) {
+        if (editable) {
           div.addEventListener("click", (e) => {
             if (e.target.classList.contains("del")) return;
             openEditor(wrap, c.cid);
           });
           div.querySelector(".del").addEventListener("click", async (e) => {
             e.stopPropagation();
-            await fetch(API + "/" + c.cid + "?author=" + AUTHOR, { method: "DELETE" });
+            await fetch(API + "/" + c.cid, { method: "DELETE" });
             await refresh();
           });
         }
