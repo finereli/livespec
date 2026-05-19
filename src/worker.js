@@ -257,6 +257,36 @@ async function createDoc(req, url, env) {
   }, 201);
 }
 
+// Migrate legacy v1 in place so it stays reachable at /:id/v1 after a version bump.
+async function migrateLegacyToV1(env, id, doc) {
+  if (!doc._legacy) return;
+  await env.LIVESPEC.put(
+    `doc:${id}:v1`,
+    JSON.stringify({ markdown: doc._legacyMarkdown, created: doc.created }),
+  );
+  const legacyComments = await env.LIVESPEC.get("comments:" + id);
+  if (legacyComments) {
+    await env.LIVESPEC.put(`comments:${id}:v1`, legacyComments);
+  }
+}
+
+// Carry forward approvals + removal markers on blocks that still exist (same
+// blockId) in the new version. Comments do NOT carry forward — they belong to
+// the round they were written for. A removal naturally drops once the agent
+// deletes the block (blockId no longer present).
+async function carryForwardMarks(env, id, doc, newMd, nextVersion, now) {
+  const prev = await loadVersionComments(env, id, doc, doc.currentVersion);
+  const carryable = prev.filter((c) => c.type === "approve" || c.type === "remove");
+  if (!carryable.length) return;
+  const newIds = new Set(renderBlocks(newMd).map((b) => b.blockId).filter(Boolean));
+  const carried = carryable
+    .filter((a) => newIds.has(a.blockId))
+    .map((a) => ({ ...a, cid: randId(10), created: now }));
+  if (carried.length) {
+    await env.LIVESPEC.put(`comments:${id}:v${nextVersion}`, JSON.stringify(carried));
+  }
+}
+
 async function updateDoc(req, env, id) {
   const doc = await loadDoc(env, id);
   if (!doc) return notFound("doc not found");
@@ -265,36 +295,11 @@ async function updateDoc(req, env, id) {
   if (!md.trim()) return bad("empty markdown");
   const now = Date.now();
 
-  // Migrate legacy v1 in place so it stays reachable at /:id/v1 after the bump.
-  if (doc._legacy) {
-    await env.LIVESPEC.put(
-      `doc:${id}:v1`,
-      JSON.stringify({ markdown: doc._legacyMarkdown, created: doc.created }),
-    );
-    const legacyComments = await env.LIVESPEC.get("comments:" + id);
-    if (legacyComments) {
-      await env.LIVESPEC.put(`comments:${id}:v1`, legacyComments);
-    }
-  }
+  await migrateLegacyToV1(env, id, doc);
 
   const next = doc.currentVersion + 1;
   await env.LIVESPEC.put(`doc:${id}:v${next}`, JSON.stringify({ markdown: md, created: now }));
-
-  // Carry forward approvals + removal markers on blocks that still exist
-  // (same blockId) in the new version. Comments do NOT carry forward — they
-  // belong to the round they were written for. A removal naturally drops once
-  // the agent actually deletes the block (blockId no longer present).
-  const prev = await loadVersionComments(env, id, doc, doc.currentVersion);
-  const carryable = prev.filter((c) => c.type === "approve" || c.type === "remove");
-  if (carryable.length) {
-    const newIds = new Set(renderBlocks(md).map((b) => b.blockId).filter(Boolean));
-    const carried = carryable
-      .filter((a) => newIds.has(a.blockId))
-      .map((a) => ({ ...a, cid: randId(10), created: now }));
-    if (carried.length) {
-      await env.LIVESPEC.put(`comments:${id}:v${next}`, JSON.stringify(carried));
-    }
-  }
+  await carryForwardMarks(env, id, doc, md, next, now);
 
   const versions = (doc.versions || []).concat([{ v: next, created: now }]);
   await env.LIVESPEC.put("doc:" + id, JSON.stringify({
