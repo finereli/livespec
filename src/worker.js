@@ -193,6 +193,46 @@ async function saveCurrentComments(env, id, doc, arr) {
   await env.LIVESPEC.put(commentsKey(id, doc, doc.currentVersion), JSON.stringify(arr));
 }
 
+function commentEntryBase(body) {
+  return {
+    cid: randId(10),
+    blockId: body.blockId,
+    anchor: (body.anchor || "").slice(0, 500),
+    author: "anon",
+    order: typeof body.order === "number" ? body.order : 0,
+    created: Date.now(),
+  };
+}
+
+async function postMark(env, id, doc, body, type) {
+  // Toggle: any existing mark of this type on this block clears them all
+  // (sweeps up legacy per-author records); otherwise add a single anon mark.
+  const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
+  const matches = (c) => c.type === type && c.blockId === body.blockId;
+  if (comments.some(matches)) {
+    await saveCurrentComments(env, id, doc, comments.filter((c) => !matches(c)));
+    return json({ ok: true, set: false });
+  }
+  const entry = { ...commentEntryBase(body), type };
+  comments.push(entry);
+  await saveCurrentComments(env, id, doc, comments);
+  return json({ ok: true, set: true, cid: entry.cid }, 201);
+}
+
+async function postComment(env, id, doc, body) {
+  if (!body.body) return bad("body required for comment");
+  const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
+  const entry = {
+    ...commentEntryBase(body),
+    type: "comment",
+    body: String(body.body).slice(0, 5000),
+    updated: Date.now(),
+  };
+  comments.push(entry);
+  await saveCurrentComments(env, id, doc, comments);
+  return json(entry, 201);
+}
+
 async function createDoc(req, url, env) {
   const md = await req.text();
   if (!md.trim()) return bad("empty markdown");
@@ -369,47 +409,11 @@ export default {
       if (sub === "comments" && !cid && req.method === "POST") {
         const body = await req.json().catch(() => null);
         if (!body || !body.blockId) return bad("blockId required");
-        const author = "anon";
         const type = body.type === "approve" ? "approve"
           : body.type === "remove" ? "remove"
           : "comment";
-        const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
-        if (type === "approve" || type === "remove") {
-          // Toggle: any existing mark of this type on this block clears them
-          // all (sweeps up legacy per-author records); otherwise add a single
-          // anon mark.
-          const hadAny = comments.some((c) => c.type === type && c.blockId === body.blockId);
-          if (hadAny) {
-            const remaining = comments.filter((c) => !(c.type === type && c.blockId === body.blockId));
-            await saveCurrentComments(env, id, doc, remaining);
-            return json({ ok: true, set: false });
-          }
-          const entry = {
-            cid: randId(10), type,
-            blockId: body.blockId,
-            anchor: (body.anchor || "").slice(0, 500),
-            author,
-            order: typeof body.order === "number" ? body.order : 0,
-            created: Date.now(),
-          };
-          comments.push(entry);
-          await saveCurrentComments(env, id, doc, comments);
-          return json({ ok: true, set: true, cid: entry.cid }, 201);
-        }
-        if (!body.body) return bad("body required for comment");
-        const entry = {
-          cid: randId(10), type: "comment",
-          blockId: body.blockId,
-          anchor: (body.anchor || "").slice(0, 500),
-          body: String(body.body).slice(0, 5000),
-          author,
-          order: typeof body.order === "number" ? body.order : 0,
-          created: Date.now(),
-          updated: Date.now(),
-        };
-        comments.push(entry);
-        await saveCurrentComments(env, id, doc, comments);
-        return json(entry, 201);
+        if (type === "approve" || type === "remove") return postMark(env, id, doc, body, type);
+        return postComment(env, id, doc, body);
       }
       if (sub === "comments" && cid && req.method === "PUT") {
         const body = await req.json().catch(() => null);
