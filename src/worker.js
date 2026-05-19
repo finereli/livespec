@@ -1051,7 +1051,13 @@ const DOC_JS = `(function () {
     const onlyComments = COMMENTS.filter((c) => (c.type || "comment") === "comment");
     countEl.textContent = onlyComments.length;
     document.getElementById("count-label").textContent = onlyComments.length === 1 ? "comment" : "comments";
-    const approvedBlockIds = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
+    // Only count approvals on blocks that still exist on the page — orphan
+    // records from prior versions would otherwise inflate the badge and
+    // could hide the "next unapproved" button while real wraps are unmarked.
+    const liveBlockIds = new Set(wraps.map((w) => w.dataset.blockId));
+    const approvedBlockIds = new Set(
+      COMMENTS.filter((c) => c.type === "approve" && liveBlockIds.has(c.blockId)).map((c) => c.blockId),
+    );
     document.getElementById("approve-count").textContent = approvedBlockIds.size;
     const nextBtn = document.getElementById("next-unapproved");
     nextBtn.hidden = READONLY || approvedBlockIds.size === wraps.length;
@@ -1114,11 +1120,12 @@ const DOC_JS = `(function () {
     const approved = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
     const unapproved = wraps.filter((w) => !approved.has(w.dataset.blockId));
     if (!unapproved.length) return;
-    const topbarH = document.querySelector(".topbar").getBoundingClientRect().height + 8;
-    const next = unapproved.find((w) => w.getBoundingClientRect().top > topbarH + 2) || unapproved[0];
-    next.scrollIntoView({ block: "start", behavior: "smooth" });
-    // Offset for the sticky topbar.
-    setTimeout(() => window.scrollBy({ top: -topbarH, behavior: "instant" }), 0);
+    const topbarH = document.querySelector(".topbar").getBoundingClientRect().height;
+    // Threshold: "below the topbar" with a little slack so the currently-
+    // anchored block (its top sitting flush with the topbar) doesn't count.
+    const next = unapproved.find((w) => w.getBoundingClientRect().top > topbarH + 8) || unapproved[0];
+    const targetY = next.getBoundingClientRect().top + window.scrollY - topbarH - 8;
+    window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
   });
 
   document.getElementById("copy-all").addEventListener("click", async () => {
