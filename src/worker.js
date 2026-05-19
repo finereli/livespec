@@ -526,6 +526,12 @@ const DOC_CSS = `
   .topbar .brand { color: var(--muted); text-decoration: none; margin-right: auto; font-weight: 600; }
   .topbar .brand:hover { color: var(--accent); }
   .topbar .count { color: var(--muted); }
+  #next-unapproved {
+    font-size: 11px; padding: 1px 6px; margin: 0 2px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--rule);
+    border-radius: 4px; cursor: pointer; line-height: 1.3;
+  }
+  #next-unapproved:hover { border-color: var(--accent); color: var(--accent); }
   .version-menu { position: relative; }
   .version-toggle { font: inherit; font-size: 12px; padding: 4px 10px;
     background: var(--bg); color: var(--muted); border: 1px solid var(--rule);
@@ -731,7 +737,7 @@ const TEMPLATE = `<!doctype html>
 <body>
 <div class="topbar">
   <a class="brand" href="/">livespec</a>
-  <span class="count"><span id="approve-count">0</span>/<span id="block-total">0</span> approved · <span id="count">0</span> <span id="count-label">comments</span></span>
+  <span class="count"><span id="approve-count">0</span>/<span id="block-total">0</span> approved <button id="next-unapproved" type="button" title="Jump to next unapproved block" hidden>↓</button> · <span id="count">0</span> <span id="count-label">comments</span></span>
   <div class="version-menu">
     <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
     <div id="version-list" class="version-list"></div>
@@ -1047,6 +1053,8 @@ const DOC_JS = `(function () {
     document.getElementById("count-label").textContent = onlyComments.length === 1 ? "comment" : "comments";
     const approvedBlockIds = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
     document.getElementById("approve-count").textContent = approvedBlockIds.size;
+    const nextBtn = document.getElementById("next-unapproved");
+    nextBtn.hidden = READONLY || approvedBlockIds.size === wraps.length;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
     const cmtByBlock = {}, apprByBlock = {}, rmByBlock = {};
     for (const c of sorted) {
@@ -1099,6 +1107,19 @@ const DOC_JS = `(function () {
       }
     }
   }
+
+  document.getElementById("next-unapproved").addEventListener("click", () => {
+    // Find the first unapproved block whose top is below the topbar; wrap to
+    // the first unapproved if we're past the last one.
+    const approved = new Set(COMMENTS.filter((c) => c.type === "approve").map((c) => c.blockId));
+    const unapproved = wraps.filter((w) => !approved.has(w.dataset.blockId));
+    if (!unapproved.length) return;
+    const topbarH = document.querySelector(".topbar").getBoundingClientRect().height + 8;
+    const next = unapproved.find((w) => w.getBoundingClientRect().top > topbarH + 2) || unapproved[0];
+    next.scrollIntoView({ block: "start", behavior: "smooth" });
+    // Offset for the sticky topbar.
+    setTimeout(() => window.scrollBy({ top: -topbarH, behavior: "instant" }), 0);
+  });
 
   document.getElementById("copy-all").addEventListener("click", async () => {
     // Approvals are for the human reviewer's tracking. The agent only needs
