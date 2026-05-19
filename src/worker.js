@@ -177,21 +177,20 @@ async function loadMarkdown(env, id, doc, version) {
   return raw ? JSON.parse(raw).markdown : null;
 }
 
-async function loadVersionComments(env, id, doc, version) {
-  const key = doc._legacy && version === 1
+function commentsKey(id, doc, version) {
+  return doc._legacy && version === 1
     ? "comments:" + id
     : `comments:${id}:v${version}`;
-  const raw = await env.LIVESPEC.get(key);
+}
+
+async function loadVersionComments(env, id, doc, version) {
+  const raw = await env.LIVESPEC.get(commentsKey(id, doc, version));
   return raw ? JSON.parse(raw) : [];
 }
 
 async function saveCurrentComments(env, id, doc, arr) {
   // Mutations only ever happen on the current version.
-  const v = doc.currentVersion;
-  const key = doc._legacy && v === 1
-    ? "comments:" + id
-    : `comments:${id}:v${v}`;
-  await env.LIVESPEC.put(key, JSON.stringify(arr));
+  await env.LIVESPEC.put(commentsKey(id, doc, doc.currentVersion), JSON.stringify(arr));
 }
 
 async function createDoc(req, url, env) {
