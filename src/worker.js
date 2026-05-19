@@ -487,12 +487,6 @@ function renderHtml(id, doc, viewingVersion, markdown) {
     .replace("__DOC_BODY__", body);
 }
 
-function djb2Hex(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
 const DOC_CSS = `
   :root {
     --bg: #fafaf7; --fg: #1a1a1a; --muted: #7a7569;
@@ -1169,7 +1163,7 @@ const DOC_JS = `(function () {
 })();
 `;
 
-const ASSET_VER = djb2Hex(DOC_CSS) + djb2Hex(DOC_JS);
+const ASSET_VER = djb2(DOC_CSS) + djb2(DOC_JS);
 
 const LANDING_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
