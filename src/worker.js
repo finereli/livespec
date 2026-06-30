@@ -114,10 +114,6 @@ function renderDocBody(md) {
   let order = 0;
   for (const b of blocks) {
     if (b.noBlock) { parts.push(b.html); continue; }
-    // Headings render as plain HTML — no comment / approve pills (not useful).
-    // Their blockId still exists in renderBlocks so non-heading blockIds stay
-    // stable and carry-forward keeps working.
-    if (b.isHeading) { parts.push(b.html); continue; }
     const wrapClass = "block-wrap" + (b.isList ? " is-list" : "");
     const textClass = "block-text" + (b.isTable ? " is-table" : "");
     let inner = b.html;
@@ -129,7 +125,7 @@ function renderDocBody(md) {
           `<div class="block-actions">` +
             `<button class="pill add" type="button">+ comment</button>` +
             `<button class="pill remove" type="button" title="Ask to remove this block">🗑</button>` +
-            `<button class="pill approve" type="button" title="Approve this block"></button>` +
+            `<button class="pill approve" type="button" title="Approve this block">✓</button>` +
           `</div>` +
         `</div>` +
         `<div class="block-comments"></div>` +
@@ -226,6 +222,21 @@ async function postComment(env, id, doc, body) {
     ...commentEntryBase(body),
     type: "comment",
     body: String(body.body).slice(0, 5000),
+    updated: Date.now(),
+  };
+  comments.push(entry);
+  await saveCurrentComments(env, id, doc, comments);
+  return json(entry, 201);
+}
+
+async function postSuggest(env, id, doc, body) {
+  if (!body.original && body.original !== "") return bad("original required");
+  const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
+  const entry = {
+    ...commentEntryBase(body),
+    type: "suggest",
+    original: String(body.original).slice(0, 2000),
+    replacement: String(body.replacement || "").slice(0, 2000),
     updated: Date.now(),
   };
   comments.push(entry);
@@ -416,19 +427,27 @@ export default {
         if (!body || !body.blockId) return bad("blockId required");
         const type = body.type === "approve" ? "approve"
           : body.type === "remove" ? "remove"
+          : body.type === "suggest" ? "suggest"
           : "comment";
         if (type === "approve" || type === "remove") return postMark(env, id, doc, body, type);
+        if (type === "suggest") return postSuggest(env, id, doc, body);
         return postComment(env, id, doc, body);
       }
       if (sub === "comments" && cid && req.method === "PUT") {
         const body = await req.json().catch(() => null);
-        if (!body || !body.body) return bad("body required");
+        if (!body) return bad("body required");
         const comments = await loadVersionComments(env, id, doc, doc.currentVersion);
         const idx = comments.findIndex((c) => c.cid === cid);
         if (idx < 0) return notFound("comment not found");
         const c = comments[idx];
-        if (c.type !== "comment") return bad("only comments can be edited");
-        c.body = String(body.body).slice(0, 5000);
+        if (c.type === "suggest") {
+          c.replacement = String(body.replacement || "").slice(0, 2000);
+        } else if (c.type === "comment" || !c.type) {
+          if (!body.body) return bad("body required");
+          c.body = String(body.body).slice(0, 5000);
+        } else {
+          return bad("only comments and suggestions can be edited");
+        }
         c.updated = Date.now();
         await saveCurrentComments(env, id, doc, comments);
         return json(c);
@@ -565,8 +584,8 @@ const DOC_CSS = `
   }
 
   /* In readonly mode, hide the editor affordances entirely. */
-  body.readonly .block-actions, body.readonly .inline-comment .del { display: none !important; }
-  body.readonly .inline-comment.mine { cursor: default; }
+  body.readonly .block-actions, body.readonly .inline-comment .del, body.readonly .inline-suggest .del { display: none !important; }
+  body.readonly .inline-comment.mine, body.readonly .inline-suggest.mine { cursor: default; }
   body.readonly #copy-all { display: none; }
   .doc-footer {
     max-width: 760px; margin: 40px auto 24px; padding: 16px 24px 0;
@@ -654,7 +673,7 @@ const DOC_CSS = `
   .block-wrap.selected .add { opacity: 1; pointer-events: auto; }
   .add:hover { opacity: 1 !important; background: var(--accent); color: white; border-color: var(--accent); }
 
-  .approve { opacity: 0; }
+  .approve { opacity: 0.3; pointer-events: auto; }
   @media (hover: hover) { .block-text:hover .approve { opacity: 1; pointer-events: auto; } }
   .block-wrap.selected .approve { opacity: 1; pointer-events: auto; }
   .approve.mine { background: var(--approve); color: white; border-color: var(--approve); opacity: 1; pointer-events: auto; }
@@ -697,6 +716,47 @@ const DOC_CSS = `
   }
   .inline-comment.mine:hover .del { opacity: 1; }
   .inline-comment .del:hover { color: var(--accent); }
+
+  .inline-suggest {
+    font-size: 13px; color: var(--fg);
+    border-left: 2px solid var(--approve);
+    padding: 4px 10px; margin: 4px 0;
+    background: color-mix(in srgb, var(--approve-bg) 55%, transparent);
+    border-radius: 0 4px 4px 0;
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  .inline-suggest .body { flex: 1; }
+  .inline-suggest .suggest-original {
+    text-decoration: line-through; color: var(--muted);
+  }
+  .inline-suggest .suggest-arrow { color: var(--muted); margin: 0 2px; }
+  .inline-suggest .suggest-replacement { font-weight: 500; }
+  .inline-suggest.mine { cursor: pointer; }
+  .inline-suggest.mine:hover { background: var(--approve-bg); }
+  .inline-suggest.editing { display: none; }
+  .inline-suggest .del {
+    font-style: normal; font-size: 12px; padding: 0 6px; opacity: 0;
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    line-height: 1;
+  }
+  .inline-suggest.mine:hover .del { opacity: 1; }
+  .inline-suggest .del:hover { color: var(--accent); }
+
+  .suggest-btn, .suggest-btn:hover {
+    position: absolute; z-index: 50;
+    font-size: 13px; padding: 6px 14px;
+    background: var(--accent); color: white;
+    border: none; border-radius: 6px; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,.18);
+    white-space: nowrap; line-height: 1.4;
+  }
+  .block-text.suggest-active { background: var(--accent-bg); }
+
+  .editor .suggest-orig {
+    font-size: 13px; color: var(--muted);
+    text-decoration: line-through;
+    padding: 0 8px 4px;
+  }
 
   .editor { margin: 6px 0 12px; padding: 10px; background: var(--accent-bg);
     border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 6px; }
@@ -878,26 +938,41 @@ const DOC_JS = `(function () {
   const wraps = [...content.querySelectorAll(":scope > .block-wrap")];
   const wrapById = Object.fromEntries(wraps.map((w) => [w.dataset.blockId, w]));
   document.getElementById("block-total").textContent = wraps.length;
+  // Touch-only: tap a block to reveal the action pills. Desktop hover handles this in CSS.
+  // Two-tap rule: the tap that selects a block must not activate any button.
+  const TOUCH = matchMedia("(hover: none)").matches;
+  let selected = null;
+  function select(wrap) {
+    if (!TOUCH) return;
+    if (selected && selected !== wrap) selected.classList.remove("selected");
+    selected = wrap;
+    if (wrap) wrap.classList.add("selected");
+  }
+
   for (const wrap of wraps) {
     const addBtn = wrap.querySelector(".pill.add");
     const approveBtn = wrap.querySelector(".pill.approve");
     const removeBtn = wrap.querySelector(".pill.remove");
-    if (addBtn) addBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditor(wrap, null); });
-    if (approveBtn) approveBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMark(wrap, "approve"); });
-    if (removeBtn) removeBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMark(wrap, "remove"); });
+    if (addBtn) addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (TOUCH && !wrap.classList.contains("selected")) { select(wrap); return; }
+      openEditor(wrap, null);
+    });
+    if (approveBtn) approveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      select(wrap);
+      toggleMark(wrap, "approve");
+    });
+    if (removeBtn) removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (TOUCH && !wrap.classList.contains("selected")) { select(wrap); return; }
+      toggleMark(wrap, "remove");
+    });
   }
 
-  // Touch-only: tap a block to reveal the action pills. Desktop hover handles this in CSS.
-  const TOUCH = matchMedia("(hover: none)").matches;
   if (TOUCH) {
-    let selected = null;
-    function select(wrap) {
-      if (selected && selected !== wrap) selected.classList.remove("selected");
-      selected = wrap;
-      if (wrap) wrap.classList.add("selected");
-    }
     document.addEventListener("click", (e) => {
-      if (e.target.closest(".editor, .pill, .inline-comment")) return;
+      if (e.target.closest(".editor, .pill, .inline-comment, .inline-suggest")) return;
       const wrap = e.target.closest(".block-wrap");
       if (wrap) {
         if (window.getSelection && !window.getSelection().isCollapsed) return;
@@ -905,6 +980,82 @@ const DOC_JS = `(function () {
       } else {
         select(null);
       }
+    });
+  }
+
+  let suggestBtn = null;
+  let suggestInfo = null;
+  function hideSuggestBtn() {
+    if (suggestBtn) {
+      suggestBtn.remove();
+      document.querySelectorAll(".suggest-active").forEach((el) => el.classList.remove("suggest-active"));
+      suggestBtn = null;
+    }
+    suggestInfo = null;
+  }
+  function tryShowSuggestBtn() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) { hideSuggestBtn(); return; }
+    if (document.querySelector(".editor")) { hideSuggestBtn(); return; }
+    const toEl = (n) => n && (n.nodeType === Node.TEXT_NODE ? n.parentElement : n);
+    const anchorEl = toEl(sel.anchorNode);
+    const focusEl = toEl(sel.focusNode);
+    if (!anchorEl || !anchorEl.closest || !focusEl || !focusEl.closest) { hideSuggestBtn(); return; }
+    if (anchorEl.closest("textarea, .editor, input") || focusEl.closest("textarea, .editor, input")) { hideSuggestBtn(); return; }
+    const anchorBlock = anchorEl.closest(".block-text");
+    const focusBlock = focusEl.closest(".block-text");
+    if (!anchorBlock || !focusBlock || anchorBlock !== focusBlock) { hideSuggestBtn(); return; }
+    const wrap = anchorBlock.closest(".block-wrap");
+    if (!wrap) { hideSuggestBtn(); return; }
+    const text = sel.toString();
+    if (!text.trim()) { hideSuggestBtn(); return; }
+    suggestInfo = { wrap, text };
+    const endRange = document.createRange();
+    endRange.setStart(sel.focusNode, sel.focusOffset);
+    endRange.collapse(true);
+    const endRect = endRange.getBoundingClientRect();
+    if (!suggestBtn) {
+      suggestBtn = document.createElement("button");
+      suggestBtn.className = "suggest-btn";
+      suggestBtn.type = "button";
+      suggestBtn.textContent = "Edit";
+      suggestBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      suggestBtn.addEventListener("mouseenter", () => {
+        if (suggestInfo) suggestInfo.wrap.querySelector(".block-text").classList.add("suggest-active");
+      });
+      suggestBtn.addEventListener("mouseleave", () => {
+        document.querySelectorAll(".suggest-active").forEach((el) => el.classList.remove("suggest-active"));
+      });
+      suggestBtn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        const info = suggestInfo;
+        if (info) openSuggestEditor(info.wrap, info.text);
+        hideSuggestBtn();
+        if (window.getSelection) window.getSelection().removeAllRanges();
+      }, { passive: false });
+      suggestBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (suggestInfo) openSuggestEditor(suggestInfo.wrap, suggestInfo.text);
+        hideSuggestBtn();
+        if (window.getSelection) window.getSelection().removeAllRanges();
+      });
+      document.body.appendChild(suggestBtn);
+    }
+    const forward = sel.anchorNode === sel.focusNode
+      ? sel.anchorOffset <= sel.focusOffset
+      : !!(sel.anchorNode.compareDocumentPosition(sel.focusNode) & Node.DOCUMENT_POSITION_FOLLOWING);
+    suggestBtn.style.top = (endRect.bottom + window.scrollY + 6) + "px";
+    suggestBtn.style.left = (endRect.left + window.scrollX - (forward ? suggestBtn.offsetWidth : 0)) + "px";
+  }
+  if (!READONLY) {
+    if (TOUCH) {
+      document.addEventListener("selectionchange", tryShowSuggestBtn);
+    } else {
+      document.addEventListener("mouseup", tryShowSuggestBtn);
+    }
+    document.addEventListener("selectionchange", () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) hideSuggestBtn();
     });
   }
 
@@ -1049,8 +1200,97 @@ const DOC_JS = `(function () {
     ta.selectionStart = ta.value.length;
   }
 
+  function openSuggestEditor(wrap, originalText, editingCid) {
+    const tag = editingCid || "suggest-new";
+    const existing = wrap.querySelector('.editor[data-editing="' + tag + '"]');
+    if (existing) { existing.querySelector("textarea").focus(); return; }
+    const editingEl = editingCid ? wrap.querySelector('.inline-suggest[data-cid="' + editingCid + '"]') : null;
+    if (editingEl) editingEl.classList.add("editing");
+
+    const editor = document.createElement("div");
+    editor.className = "editor";
+    editor.dataset.editing = tag;
+    editor.innerHTML =
+      '<div class="suggest-orig"></div>' +
+      '<textarea rows="1" placeholder="Type replacement…"></textarea>' +
+      '<div class="row"><span class="status"></span>' +
+      '<button class="cancel" type="button">Cancel</button>' +
+      '<button class="primary save" type="button">Save</button></div>';
+    editor.querySelector(".suggest-orig").textContent = originalText;
+    const ta = editor.querySelector("textarea");
+    const status = editor.querySelector(".status");
+    const saveBtn = editor.querySelector(".save");
+    if (editingCid) {
+      const c = COMMENTS.find((x) => x.cid === editingCid);
+      if (c) ta.value = c.replacement;
+    } else {
+      ta.value = originalText;
+    }
+    const autosize = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+    ta.addEventListener("input", autosize);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !TOUCH) { e.preventDefault(); saveBtn.click(); }
+      else if (e.key === "Escape" && !TOUCH) { e.preventDefault(); editor.querySelector(".cancel").click(); }
+    });
+    queueMicrotask(autosize);
+    editor.querySelector(".cancel").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (editingEl) editingEl.classList.remove("editing");
+      editor.remove();
+    });
+    saveBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const replacement = ta.value.trim();
+      if (replacement === originalText) { status.textContent = "No change"; return; }
+      status.textContent = "Saving…";
+      try {
+        const res = editingCid
+          ? await fetch(API + "/" + editingCid, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ replacement }),
+            })
+          : await fetch(API, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                type: "suggest",
+                blockId: wrap.dataset.blockId,
+                anchor: snippet(wrap),
+                original: originalText,
+                replacement,
+                order: Number(wrap.dataset.order),
+              }),
+            });
+        if (!res.ok) {
+          status.textContent = "";
+          const reloaded = await checkForNewVersion();
+          if (!reloaded) showToast("Save failed", true);
+          return;
+        }
+        editor.remove();
+        await refresh();
+      } catch (err) {
+        status.textContent = "";
+        showToast("Save failed", true);
+      }
+    });
+    editor.addEventListener("click", (e) => e.stopPropagation());
+    if (editingEl) {
+      editingEl.before(editor);
+    } else {
+      wrap.querySelector(":scope > .block-comments").appendChild(editor);
+    }
+    ta.focus();
+    if (editingCid) {
+      ta.selectionStart = ta.value.length;
+    } else {
+      ta.select();
+    }
+  }
+
   function renderAll() {
-    const onlyComments = COMMENTS.filter((c) => (c.type || "comment") === "comment");
+    const onlyComments = COMMENTS.filter((c) => { const t = c.type || "comment"; return t === "comment" || t === "suggest"; });
     countEl.textContent = onlyComments.length;
     document.getElementById("count-label").textContent = onlyComments.length === 1 ? "comment" : "comments";
     // Only count approvals on blocks that still exist on the page — orphan
@@ -1064,11 +1304,12 @@ const DOC_JS = `(function () {
     const nextBtn = document.getElementById("next-unapproved");
     nextBtn.hidden = READONLY || approvedBlockIds.size === wraps.length;
     const sorted = COMMENTS.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.created - b.created);
-    const cmtByBlock = {}, apprByBlock = {}, rmByBlock = {};
+    const cmtByBlock = {}, apprByBlock = {}, rmByBlock = {}, sugByBlock = {};
     for (const c of sorted) {
       const t = c.type || "comment";
       if (t === "approve") (apprByBlock[c.blockId] = apprByBlock[c.blockId] || []).push(c);
       else if (t === "remove") (rmByBlock[c.blockId] = rmByBlock[c.blockId] || []).push(c);
+      else if (t === "suggest") (sugByBlock[c.blockId] = sugByBlock[c.blockId] || []).push(c);
       else (cmtByBlock[c.blockId] = cmtByBlock[c.blockId] || []).push(c);
     }
     for (const wrap of wraps) {
@@ -1113,6 +1354,35 @@ const DOC_JS = `(function () {
         }
         container.appendChild(div);
       }
+      // Suggestions
+      const suggests = sugByBlock[wrap.dataset.blockId] || [];
+      for (const c of suggests) {
+        const div = document.createElement("div");
+        const editable = !READONLY;
+        div.className = "inline-suggest" + (editable ? " mine" : "");
+        div.dataset.cid = c.cid;
+        const hasReplacement = c.replacement && c.replacement.trim();
+        div.innerHTML =
+          '<span class="body">' +
+            '<span class="suggest-original"></span>' +
+            (hasReplacement ? '<span class="suggest-arrow"> → </span><span class="suggest-replacement"></span>' : '') +
+          '</span>' +
+          (editable ? '<button class="del" type="button" title="Delete">×</button>' : "");
+        div.querySelector(".suggest-original").textContent = c.original;
+        if (hasReplacement) div.querySelector(".suggest-replacement").textContent = c.replacement;
+        if (editable) {
+          div.addEventListener("click", (e) => {
+            if (e.target.classList.contains("del")) return;
+            openSuggestEditor(wrap, c.original, c.cid);
+          });
+          div.querySelector(".del").addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await fetch(API + "/" + c.cid, { method: "DELETE" });
+            await refresh();
+          });
+        }
+        container.appendChild(div);
+      }
     }
   }
 
@@ -1140,9 +1410,10 @@ const DOC_JS = `(function () {
     const byBlock = {};
     for (const c of actionable) {
       const g = byBlock[c.blockId] = byBlock[c.blockId] || {
-        anchor: c.anchor, order: c.order, comments: [], remove: false,
+        anchor: c.anchor, order: c.order, comments: [], suggests: [], remove: false,
       };
       if (c.type === "remove") g.remove = true;
+      else if (c.type === "suggest") g.suggests.push(c);
       else g.comments.push(c.body);
     }
     const groups = Object.entries(byBlock).sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0));
@@ -1152,6 +1423,7 @@ const DOC_JS = `(function () {
       out.push("");
       if (g.remove) out.push("**Remove this block.**");
       for (const body of g.comments) out.push(body);
+      for (const s of g.suggests) out.push(s.replacement && s.replacement.trim() ? "**Edit:** \`" + s.original + "\` → \`" + s.replacement + "\`" : "**Delete:** \`" + s.original + "\`");
       out.push("");
       out.push("---");
       out.push("");
