@@ -586,7 +586,7 @@ const DOC_CSS = `
   /* In readonly mode, hide the editor affordances entirely. */
   body.readonly .block-actions, body.readonly .inline-comment .del, body.readonly .inline-suggest .del { display: none !important; }
   body.readonly .inline-comment.mine, body.readonly .inline-suggest.mine { cursor: default; }
-  body.readonly #copy-all { display: none; }
+  body.readonly #copy-comments { display: none; }
   .doc-footer {
     max-width: 760px; margin: 40px auto 24px; padding: 16px 24px 0;
     border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px;
@@ -742,14 +742,20 @@ const DOC_CSS = `
   .inline-suggest.mine:hover .del { opacity: 1; }
   .inline-suggest .del:hover { color: var(--accent); }
 
-  .suggest-btn, .suggest-btn:hover {
+  .suggest-btns {
     position: absolute; z-index: 50;
-    font-size: 13px; padding: 6px 14px;
-    background: var(--accent); color: white;
-    border: none; border-radius: 6px; cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,.18);
-    white-space: nowrap; line-height: 1.4;
+    display: flex; gap: 3px;
   }
+  .suggest-btns button {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--bg); color: var(--muted);
+    border: 1px solid var(--rule); cursor: pointer;
+    line-height: 1.4; white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,.18);
+  }
+  .suggest-btns .suggest-edit:hover { background: var(--accent); color: white; border-color: var(--accent); }
+  .suggest-btns .suggest-del { font-size: 10px; padding: 2px 7px; }
+  .suggest-btns .suggest-del:hover { color: #c53030; border-color: #c53030; }
   .block-text.suggest-active { background: var(--accent-bg); }
 
   .editor .suggest-orig {
@@ -804,7 +810,8 @@ const TEMPLATE = `<!doctype html>
     <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
     <div id="version-list" class="version-list"></div>
   </div>
-  <button id="copy-all" class="primary">Copy all</button>
+  <button id="copy-content" type="button">Copy content</button>
+  <button id="copy-comments" class="primary" type="button">Copy comments</button>
 </div>
 <div id="readonly-banner" class="readonly-banner" hidden>
   Read-only · viewing v<span id="rb-viewing">?</span> of <span id="rb-current">?</span>.
@@ -985,6 +992,30 @@ const DOC_JS = `(function () {
 
   let suggestBtn = null;
   let suggestInfo = null;
+  async function deleteSuggest(wrap, originalText) {
+    try {
+      const res = await fetch(API, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "suggest",
+          blockId: wrap.dataset.blockId,
+          anchor: snippet(wrap),
+          original: originalText,
+          replacement: "",
+          order: Number(wrap.dataset.order),
+        }),
+      });
+      if (!res.ok) {
+        const reloaded = await checkForNewVersion();
+        if (!reloaded) showToast("Delete failed", true);
+        return;
+      }
+      await refresh();
+    } catch (err) {
+      showToast("Delete failed", true);
+    }
+  }
   function hideSuggestBtn() {
     if (suggestBtn) {
       suggestBtn.remove();
@@ -1015,10 +1046,8 @@ const DOC_JS = `(function () {
     endRange.collapse(true);
     const endRect = endRange.getBoundingClientRect();
     if (!suggestBtn) {
-      suggestBtn = document.createElement("button");
-      suggestBtn.className = "suggest-btn";
-      suggestBtn.type = "button";
-      suggestBtn.textContent = "Edit";
+      suggestBtn = document.createElement("div");
+      suggestBtn.className = "suggest-btns";
       suggestBtn.addEventListener("mousedown", (e) => e.preventDefault());
       suggestBtn.addEventListener("mouseenter", () => {
         if (suggestInfo) suggestInfo.wrap.querySelector(".block-text").classList.add("suggest-active");
@@ -1026,19 +1055,42 @@ const DOC_JS = `(function () {
       suggestBtn.addEventListener("mouseleave", () => {
         document.querySelectorAll(".suggest-active").forEach((el) => el.classList.remove("suggest-active"));
       });
-      suggestBtn.addEventListener("touchstart", (e) => {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "suggest-edit";
+      editBtn.textContent = "edit";
+      editBtn.addEventListener("touchstart", (e) => {
         e.preventDefault();
         const info = suggestInfo;
         if (info) openSuggestEditor(info.wrap, info.text);
         hideSuggestBtn();
         if (window.getSelection) window.getSelection().removeAllRanges();
       }, { passive: false });
-      suggestBtn.addEventListener("click", (e) => {
+      editBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         if (suggestInfo) openSuggestEditor(suggestInfo.wrap, suggestInfo.text);
         hideSuggestBtn();
         if (window.getSelection) window.getSelection().removeAllRanges();
       });
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "suggest-del";
+      delBtn.textContent = "\u{1F5D1}";
+      delBtn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        const info = suggestInfo;
+        if (info) deleteSuggest(info.wrap, info.text);
+        hideSuggestBtn();
+        if (window.getSelection) window.getSelection().removeAllRanges();
+      }, { passive: false });
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (suggestInfo) deleteSuggest(suggestInfo.wrap, suggestInfo.text);
+        hideSuggestBtn();
+        if (window.getSelection) window.getSelection().removeAllRanges();
+      });
+      suggestBtn.appendChild(editBtn);
+      suggestBtn.appendChild(delBtn);
       document.body.appendChild(suggestBtn);
     }
     const forward = sel.anchorNode === sel.focusNode
@@ -1400,7 +1452,51 @@ const DOC_JS = `(function () {
     window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
   });
 
-  document.getElementById("copy-all").addEventListener("click", async () => {
+  document.getElementById("copy-content").addEventListener("click", async () => {
+    const clone = content.cloneNode(true);
+    clone.querySelectorAll(".block-actions, .block-comments, .editor").forEach((el) => el.remove());
+    const parts = [];
+    for (const child of clone.children) {
+      if (child.classList.contains("block-wrap")) {
+        const text = child.querySelector(".block-text");
+        if (text) {
+          text.querySelectorAll(".table-scroll").forEach((ts) => ts.replaceWith(...ts.childNodes));
+          parts.push(text.innerHTML.trim());
+        }
+      } else {
+        parts.push(child.outerHTML);
+      }
+    }
+    const body = parts.join("<br>\\n");
+    const styles = document.querySelector('link[rel="stylesheet"]');
+    const css = styles ? await fetch(styles.href).then((r) => r.text()).catch(() => "") : "";
+    const html = '<!doctype html><html><head><style>' + css + '</style></head><body>' + body + '</body></html>';
+    const plainParts = [];
+    for (const child of clone.children) {
+      if (child.classList.contains("block-wrap")) {
+        const text = child.querySelector(".block-text");
+        if (text) { const t = text.textContent.trim(); if (t) plainParts.push(t); }
+      } else {
+        const t = child.textContent.trim(); if (t) plainParts.push(t);
+      }
+    }
+    const plain = plainParts.join("\\n\\n");
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = plain; document.body.appendChild(ta);
+      ta.select(); document.execCommand("copy"); ta.remove();
+    }
+    showToast("Content copied");
+  });
+
+  document.getElementById("copy-comments").addEventListener("click", async () => {
     // Approvals are for the human reviewer's tracking. The agent only needs
     // the things they have to act on: comments + removal requests.
     const actionable = COMMENTS
@@ -1436,7 +1532,7 @@ const DOC_JS = `(function () {
       ta.value = text; document.body.appendChild(ta);
       ta.select(); document.execCommand("copy"); ta.remove();
     }
-    showToast("Copied " + groups.length + " block(s)");
+    showToast("Copied " + groups.length + " comment(s)");
   });
 
   refresh();
@@ -1476,7 +1572,7 @@ footer a { color:var(--muted); }
 <h1>livespec</h1>
 <p class="tag">Upload markdown · get a URL · collect per-block comments.</p>
 
-<p class="lede">A tiny service for reviewing markdown documents — specs, plans, design notes — outside the chat window. POST a markdown file, get back a URL. Open it in a browser, hover any paragraph to leave a comment or tap ✓ to approve. Click <em>Copy all</em> to dump every comment back into the conversation.</p>
+<p class="lede">A tiny service for reviewing markdown documents — specs, plans, design notes — outside the chat window. POST a markdown file, get back a URL. Open it in a browser, hover any paragraph to leave a comment or tap ✓ to approve. Click <em>Copy comments</em> to dump every comment back into the conversation, or <em>Copy content</em> to grab the rendered document with styles.</p>
 
 <p>Designed so an agent can drive the whole loop: upload a spec, share the URL with a human reviewer, fetch the comments, apply the edits, push a new version at the same URL. The reader's tab keeps working — comments persist across browsers and devices.</p>
 
