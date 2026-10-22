@@ -496,15 +496,14 @@ function escapeHtml(s) {
 }
 // A doc wrapped end to end in <div dir="rtl">...</div> can't survive the
 // block split (the open tag lands in one block, the close in another), so
-// unwrap it and carry the direction as a doc-level setting instead.
+// unwrap it. Each block's dir="auto" handles direction from there.
 function unwrapDir(md) {
-  const m = /^\s*<div\s+dir=["'](rtl|ltr)["']\s*>\s*([\s\S]*?)\s*<\/div>\s*$/i.exec(md);
-  return m ? { md: m[2], dir: m[1].toLowerCase() } : { md, dir: "auto" };
+  const m = /^\s*<div\s+dir=["'](?:rtl|ltr)["']\s*>\s*([\s\S]*?)\s*<\/div>\s*$/i.exec(md);
+  return m ? m[1] : md;
 }
 function renderHtml(id, doc, viewingVersion, markdown) {
   const title = escapeHtml(doc.title || "Untitled");
-  const unwrapped = unwrapDir(markdown);
-  const body = renderDocBody(unwrapped.md);
+  const body = renderDocBody(unwrapDir(markdown));
   const isReadonly = viewingVersion !== doc.currentVersion;
   const config = {
     docId: id,
@@ -512,7 +511,6 @@ function renderHtml(id, doc, viewingVersion, markdown) {
     currentVersion: doc.currentVersion,
     versions: doc.versions || [],
     readonly: isReadonly,
-    dir: unwrapped.dir,
   };
   return TEMPLATE
     .replace(/__TITLE__/g, title)
@@ -819,7 +817,6 @@ const TEMPLATE = `<!doctype html>
     <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
     <div id="version-list" class="version-list"></div>
   </div>
-  <button id="dir-toggle" type="button" title="Text direction: auto-detect, right-to-left, or left-to-right">Dir: auto</button>
   <button id="copy-content" type="button">Copy content</button>
   <button id="copy-comments" class="primary" type="button">Copy comments</button>
 </div>
@@ -1461,24 +1458,6 @@ const DOC_JS = `(function () {
     const targetY = next.getBoundingClientRect().top + window.scrollY - topbarH - 8;
     window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
   });
-
-  // Text direction: "auto" lets each block pick from its first strong
-  // character; rtl/ltr force the whole doc. Remembered per doc in this browser.
-  const dirBtn = document.getElementById("dir-toggle");
-  const dirKey = "livespec-dir-" + CFG.docId;
-  const DIR_LABEL = { auto: "Dir: auto", rtl: "Dir: RTL", ltr: "Dir: LTR" };
-  let dirMode = CFG.dir || "auto";
-  try { dirMode = localStorage.getItem(dirKey) || dirMode; } catch {}
-  function applyDir() {
-    content.querySelectorAll(".block-wrap").forEach((w) => w.setAttribute("dir", dirMode));
-    dirBtn.textContent = DIR_LABEL[dirMode];
-  }
-  dirBtn.addEventListener("click", () => {
-    dirMode = { auto: "rtl", rtl: "ltr", ltr: "auto" }[dirMode];
-    try { localStorage.setItem(dirKey, dirMode); } catch {}
-    applyDir();
-  });
-  applyDir();
 
   document.getElementById("copy-content").addEventListener("click", async () => {
     const clone = content.cloneNode(true);
