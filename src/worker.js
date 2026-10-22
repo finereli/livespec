@@ -119,7 +119,7 @@ function renderDocBody(md) {
     let inner = b.html;
     if (b.isTable) inner = `<div class="table-scroll">${inner}</div>`;
     parts.push(
-      `<div class="${wrapClass}" data-block-id="${b.blockId}" data-order="${order}">` +
+      `<div class="${wrapClass}" dir="auto" data-block-id="${b.blockId}" data-order="${order}">` +
         `<div class="${textClass}">` +
           inner +
           `<div class="block-actions">` +
@@ -494,9 +494,17 @@ export default {
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+// A doc wrapped end to end in <div dir="rtl">...</div> can't survive the
+// block split (the open tag lands in one block, the close in another), so
+// unwrap it and carry the direction as a doc-level setting instead.
+function unwrapDir(md) {
+  const m = /^\s*<div\s+dir=["'](rtl|ltr)["']\s*>\s*([\s\S]*?)\s*<\/div>\s*$/i.exec(md);
+  return m ? { md: m[2], dir: m[1].toLowerCase() } : { md, dir: "auto" };
+}
 function renderHtml(id, doc, viewingVersion, markdown) {
   const title = escapeHtml(doc.title || "Untitled");
-  const body = renderDocBody(markdown);
+  const unwrapped = unwrapDir(markdown);
+  const body = renderDocBody(unwrapped.md);
   const isReadonly = viewingVersion !== doc.currentVersion;
   const config = {
     docId: id,
@@ -504,6 +512,7 @@ function renderHtml(id, doc, viewingVersion, markdown) {
     currentVersion: doc.currentVersion,
     versions: doc.versions || [],
     readonly: isReadonly,
+    dir: unwrapped.dir,
   };
   return TEMPLATE
     .replace(/__TITLE__/g, title)
@@ -608,8 +617,8 @@ const DOC_CSS = `
   code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
   pre { background: var(--code-bg); padding: 14px; border-radius: 6px; overflow-x: auto; }
   pre code { background: none; padding: 0; }
-  blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .3em 1em; color: var(--muted); }
-  ul, ol { padding-left: 1.6em; }
+  blockquote { border-inline-start: 3px solid var(--accent); margin: 1em 0; padding: .3em 1em; color: var(--muted); }
+  ul, ol { padding-inline-start: 1.6em; }
   table { border-collapse: collapse; } th, td { border: 1px solid var(--rule); padding: 6px 10px; }
   .table-scroll { overflow-x: auto; }
   /* Tables: keep the action pills below the table so they never collide with cells. */
@@ -696,13 +705,13 @@ const DOC_CSS = `
 
   .block-comments { margin: 4px 0 12px; }
   /* Align comments with the text of a list item, not the bullet. */
-  .block-wrap.is-list > .block-comments { padding-left: 1.6em; }
+  .block-wrap.is-list > .block-comments { padding-inline-start: 1.6em; }
   .inline-comment {
     font-size: 13px; font-style: italic; color: var(--muted);
-    border-left: 2px solid var(--accent);
+    border-inline-start: 2px solid var(--accent);
     padding: 4px 10px; margin: 4px 0;
     background: color-mix(in srgb, var(--accent-bg) 55%, transparent);
-    border-radius: 0 4px 4px 0;
+    border-start-end-radius: 4px; border-end-end-radius: 4px;
     display: flex; gap: 6px; align-items: flex-start;
   }
   .inline-comment .body { flex: 1; white-space: pre-wrap; }
@@ -719,10 +728,10 @@ const DOC_CSS = `
 
   .inline-suggest {
     font-size: 13px; color: var(--fg);
-    border-left: 2px solid var(--approve);
+    border-inline-start: 2px solid var(--approve);
     padding: 4px 10px; margin: 4px 0;
     background: color-mix(in srgb, var(--approve-bg) 55%, transparent);
-    border-radius: 0 4px 4px 0;
+    border-start-end-radius: 4px; border-end-end-radius: 4px;
     display: flex; gap: 6px; align-items: flex-start;
   }
   .inline-suggest .body { flex: 1; }
@@ -810,6 +819,7 @@ const TEMPLATE = `<!doctype html>
     <button id="version-toggle" class="version-toggle" type="button">v__VIEWING_VERSION__ <span class="caret">▾</span></button>
     <div id="version-list" class="version-list"></div>
   </div>
+  <button id="dir-toggle" type="button" title="Text direction: auto-detect, right-to-left, or left-to-right">Dir: auto</button>
   <button id="copy-content" type="button">Copy content</button>
   <button id="copy-comments" class="primary" type="button">Copy comments</button>
 </div>
@@ -1452,6 +1462,24 @@ const DOC_JS = `(function () {
     window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
   });
 
+  // Text direction: "auto" lets each block pick from its first strong
+  // character; rtl/ltr force the whole doc. Remembered per doc in this browser.
+  const dirBtn = document.getElementById("dir-toggle");
+  const dirKey = "livespec-dir-" + CFG.docId;
+  const DIR_LABEL = { auto: "Dir: auto", rtl: "Dir: RTL", ltr: "Dir: LTR" };
+  let dirMode = CFG.dir || "auto";
+  try { dirMode = localStorage.getItem(dirKey) || dirMode; } catch {}
+  function applyDir() {
+    content.querySelectorAll(".block-wrap").forEach((w) => w.setAttribute("dir", dirMode));
+    dirBtn.textContent = DIR_LABEL[dirMode];
+  }
+  dirBtn.addEventListener("click", () => {
+    dirMode = { auto: "rtl", rtl: "ltr", ltr: "auto" }[dirMode];
+    try { localStorage.setItem(dirKey, dirMode); } catch {}
+    applyDir();
+  });
+  applyDir();
+
   document.getElementById("copy-content").addEventListener("click", async () => {
     const clone = content.cloneNode(true);
     clone.querySelectorAll(".block-actions, .block-comments, .editor").forEach((el) => el.remove());
@@ -1461,7 +1489,9 @@ const DOC_JS = `(function () {
         const text = child.querySelector(".block-text");
         if (text) {
           text.querySelectorAll(".table-scroll").forEach((ts) => ts.replaceWith(...ts.childNodes));
-          parts.push(text.innerHTML.trim());
+          const live = content.querySelector('[data-block-id="' + child.dataset.blockId + '"]');
+          const dir = live ? getComputedStyle(live).direction : "ltr";
+          parts.push('<div dir="' + dir + '">' + text.innerHTML.trim() + '</div>');
         }
       } else {
         parts.push(child.outerHTML);
