@@ -1497,18 +1497,16 @@ const DOC_JS = `(function () {
   });
 
   document.getElementById("copy-comments").addEventListener("click", async () => {
-    // Approvals are for the human reviewer's tracking. The agent only needs
-    // the things they have to act on: comments + removal requests.
-    const actionable = COMMENTS
-      .filter((c) => c.type !== "approve")
+    const all = COMMENTS.slice()
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    if (!actionable.length) { showToast("Nothing to copy"); return; }
+    if (!all.length) { showToast("Nothing to copy"); return; }
     const byBlock = {};
-    for (const c of actionable) {
+    for (const c of all) {
       const g = byBlock[c.blockId] = byBlock[c.blockId] || {
-        anchor: c.anchor, order: c.order, comments: [], suggests: [], remove: false,
+        anchor: c.anchor, order: c.order, comments: [], suggests: [], remove: false, approved: false,
       };
-      if (c.type === "remove") g.remove = true;
+      if (c.type === "approve") g.approved = true;
+      else if (c.type === "remove") g.remove = true;
       else if (c.type === "suggest") g.suggests.push(c);
       else g.comments.push(c.body);
     }
@@ -1517,6 +1515,7 @@ const DOC_JS = `(function () {
     for (const [, g] of groups) {
       out.push("> " + (g.anchor || "").split("\\n").join("\\n> "));
       out.push("");
+      if (g.approved) out.push("✓ **Approved.**");
       if (g.remove) out.push("**Remove this block.**");
       for (const body of g.comments) out.push(body);
       for (const s of g.suggests) out.push(s.replacement && s.replacement.trim() ? "**Edit:** \`" + s.original + "\` → \`" + s.replacement + "\`" : "**Delete:** \`" + s.original + "\`");
@@ -1532,7 +1531,7 @@ const DOC_JS = `(function () {
       ta.value = text; document.body.appendChild(ta);
       ta.select(); document.execCommand("copy"); ta.remove();
     }
-    showToast("Copied " + groups.length + " comment(s)");
+    showToast("Copied " + groups.length + " block(s)");
   });
 
   refresh();

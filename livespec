@@ -64,21 +64,38 @@ def cmd_comments(doc_id):
         print("(no comments)"); return
     doc = req("GET", f"/api/docs/{doc_id}")
     print(f"# Comments on: {doc['title']}\n")
-    # Comments only — approvals are for the human's tracking, not the agent.
     groups = {}
     for c in arr:
-        if c.get("type") == "approve":
-            continue
         bid = c["blockId"]
-        g = groups.setdefault(bid, {"anchor": c.get("anchor", ""), "order": c.get("order", 0), "items": []})
-        g["items"].append(c["body"])
+        g = groups.setdefault(bid, {"anchor": c.get("anchor", ""), "order": c.get("order", 0),
+                                     "items": [], "approved": False, "remove": False, "suggests": []})
+        t = c.get("type", "comment")
+        if t == "approve":
+            g["approved"] = True
+        elif t == "remove":
+            g["remove"] = True
+        elif t == "suggest":
+            g["suggests"].append(c)
+        else:
+            g["items"].append(c.get("body", ""))
     if not groups:
         print("(no comments)"); return
     for bid, g in sorted(groups.items(), key=lambda kv: kv[1]["order"]):
         anchor = g["anchor"].replace("\n", "\n> ")
         print(f"> {anchor}\n")
+        if g["approved"]:
+            print("✓ **Approved.**")
+        if g["remove"]:
+            print("**Remove this block.**")
         for body in g["items"]:
             print(f"{body}\n")
+        for s in g["suggests"]:
+            orig = s.get("original", "")
+            repl = s.get("replacement", "")
+            if repl and repl.strip():
+                print(f"**Edit:** `{orig}` → `{repl}`")
+            else:
+                print(f"**Delete:** `{orig}`")
         print("---\n")
 
 def cmd_list():
